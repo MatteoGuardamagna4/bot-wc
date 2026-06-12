@@ -16,8 +16,9 @@ import logging
 from openai import OpenAI
 
 import api_football
+import espn
 import sofascore
-from config import OPENAI_API_KEY, OPENAI_MODEL
+from config import OPENAI_API_KEY, OPENAI_MODEL, SOFASCORE_ENABLED
 from model import build_prediction
 from scraper import scrape_match_odds
 
@@ -37,14 +38,23 @@ def run_analysis(team1: str, team2: str) -> str:
     """Full pipeline. Returns the formatted Telegram message."""
     # 1) API-Football: fixture + odds
     api_data = api_football.get_match_data(team1, team2)
-    if api_data.get("fixture"):
-        home, away = api_data["fixture"]["home"], api_data["fixture"]["away"]
-    else:
-        home, away = team1, team2
+    fx = api_data.get("fixture") or {}
+    home = fx.get("home", team1)
+    away = fx.get("away", team2)
 
-    # 2) Sofascore: per-player stats
-    home_stats = sofascore.collect_team_stats(home)
-    away_stats = sofascore.collect_team_stats(away)
+    # 2) Player stats: API-Football events first (single source, uses the
+    #    team ids already resolved by the fixture lookup — no name matching).
+    #    ESPN as free fallback; Sofascore only if explicitly enabled
+    #    (it 403-blocks many IPs; see SOFASCORE_ENABLED in .env).
+    def team_stats(team_id: int | None, name: str) -> dict:
+        stats = api_football.collect_team_stats(team_id, name) if team_id else {}
+        stats = stats or espn.collect_team_stats(name)
+        if not stats and SOFASCORE_ENABLED:
+            stats = sofascore.collect_team_stats(name)
+        return stats
+
+    home_stats = team_stats(fx.get("home_id"), home)
+    away_stats = team_stats(fx.get("away_id"), away)
 
     # 3) Statistical model
     pred = build_prediction(api_data, home_stats, away_stats)

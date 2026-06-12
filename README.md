@@ -5,12 +5,30 @@ Bot Telegram: `/analyze ARG vs FRA` → previsioni per risultati 1°/2° tempo, 
 ## Pipeline dati (in ordine di priorità)
 
 ```
-1. API-Football  → quote pre-match (media di decine di bookmaker)
-2. Sofascore     → stats giocatori dalle ultime 6 partite (gol, gialli, minuti sostituzione)
-3. Modello Poisson (model.py) → probabilità calcolate, zero AI
-4. Betexplorer scraping → contesto extra solo se 1-2 falliscono
+1. API-Football (piano Pro) — FONTE PRINCIPALE PER TUTTO:
+   • quote pre-match: 1X2, over/under, primo tempo (media bookmaker)
+   • stats giocatori: /fixtures/events delle ultime 5 partite
+     (gol con minuto, gialli, sostituzioni)
+2. ESPN          → stats giocatori di riserva (gratis, nessuna chiave)
+3. Sofascore     → solo se SOFASCORE_ENABLED=true (spesso blocca via IP)
+4. Modello Poisson (model.py) → probabilità calcolate, zero AI
 5. GPT-4o        → SOLO per riempire sezioni che i dati non coprono
 ```
+
+Costo per analisi: ~15 richieste API-Football (su 7.500/giorno del Pro).
+
+**Con il piano Pro di API-Football** il bot usa le quote reali dei bookmaker per: risultato finale (1X2 + over/under → gol attesi λ) e **primo tempo** (quote 1H winner → split 1T/2T calibrato dal mercato invece che da medie storiche).
+
+**Stats giocatori**: Sofascore viene tentato per primo ma è spesso bloccato (TLS fingerprinting; il bot usa `curl_cffi` e in caso di blocco totale si auto-disabilita per 30 min). **ESPN è la fonte effettiva** nella maggior parte dei casi: API pubbliche, nessuna chiave, dati per giocatore (gol, gialli, minuti di sostituzione) dalle ultime 5 partite.
+
+## Accesso privato
+
+Il bot risponde **solo agli utenti autorizzati**:
+
+- Il tuo chat ID (`TELEGRAM_CHAT_ID` nel `.env`) è sempre autorizzato.
+- Altri utenti devono inviare `/login CODICE` con il codice impostato in `ACCESS_CODE` nel `.env` (**cambia quello di default!**).
+- Gli autorizzati vengono salvati in `authorized.json` (su Railway il file si azzera a ogni redeploy: gli ospiti dovranno rifare `/login`).
+- Tentativi non autorizzati vengono loggati e ricevono un messaggio di rifiuto.
 
 Il footer del messaggio dichiara sempre le fonti usate. Se compare "AI (fallback)", quei numeri sono stime, non quote.
 
@@ -48,6 +66,7 @@ python bot.py
    - `TELEGRAM_CHAT_ID`
    - `OPENAI_API_KEY`
    - `API_FOOTBALL_KEY`
+   - `ACCESS_CODE`
 4. Deploy. Il bot parte e resta in polling 24/7. Log e restart dalla dashboard Railway (funziona anche da browser mobile).
 5. Ogni `git push` rideploya automaticamente.
 
@@ -64,8 +83,9 @@ python bot.py
 ## Test rapidi senza bot
 
 ```
+python sofascore.py Canada          # test stats giocatori (il fix più importante)
+python scraper.py Argentina France  # test scraping Betexplorer
 python -c "from analyzer import run_analysis; print(run_analysis('Argentina','France'))"
-python scraper.py Argentina France
 ```
 
 ## Limiti noti

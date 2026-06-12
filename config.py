@@ -9,6 +9,10 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY", "")
+ACCESS_CODE = os.getenv("ACCESS_CODE", "")
+# Sofascore is blocked (403) on many IPs — disabled by default.
+# Set SOFASCORE_ENABLED=true in .env to re-enable it as ESPN backup.
+SOFASCORE_ENABLED = os.getenv("SOFASCORE_ENABLED", "false").strip().lower() == "true"
 
 OPENAI_MODEL = "gpt-4o"
 
@@ -32,6 +36,10 @@ TEAM_CODES = {
     "NOR": "Norway", "SRB": "Serbia", "WAL": "Wales", "SCO": "Scotland",
     "AUT": "Austria", "CZE": "Czech Republic", "UKR": "Ukraine",
     "TUN": "Tunisia", "ALG": "Algeria", "EGY": "Egypt", "CIV": "Ivory Coast",
+    "BIH": "Bosnia and Herzegovina", "SVK": "Slovakia", "SVN": "Slovenia",
+    "TUR": "Turkey", "GRE": "Greece", "HUN": "Hungary", "ROU": "Romania",
+    "JOR": "Jordan", "UZB": "Uzbekistan", "IRQ": "Iraq", "RSA": "South Africa",
+    "CPV": "Cape Verde", "HAI": "Haiti", "CUW": "Curacao",
     "KSA": "Saudi Arabia", "QAT": "Qatar", "IRN": "Iran", "CRC": "Costa Rica",
     "PAN": "Panama", "PAR": "Paraguay", "VEN": "Venezuela", "NZL": "New Zealand",
 }

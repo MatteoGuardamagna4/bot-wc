@@ -47,33 +47,29 @@ def _get(client: httpx.Client, url: str, **kw) -> httpx.Response | None:
 
 
 def find_match_url(client: httpx.Client, team1: str, team2: str) -> str | None:
-    """Search Betexplorer for an upcoming match between the two teams."""
-    query = f"{team1} {team2}"
-    r = _get(client, f"{BASE}/search/", params={"s": query})
+    """Find the match on Betexplorer by scanning World Cup fixture pages.
+
+    (The /search/ endpoint returns 404 — it is JS-only — so we go straight
+    to the competition pages and match team names in link texts.)
+    """
     candidates: list[str] = []
-    if r:
+    for path in (
+        "/football/world/world-cup/fixtures/",
+        "/football/world/world-cup/",
+        "/football/world/world-cup-2026/fixtures/",
+        "/football/world/world-cup-2026/",
+        "/next/football/",
+    ):
+        r = _get(client, BASE + path)
+        if not r:
+            continue
         soup = BeautifulSoup(r.text, "lxml")
         for a in soup.select("a[href*='/football/']"):
-            href = a.get("href", "")
             text = _norm(a.get_text(" "))
             if _norm(team1) in text and _norm(team2) in text:
-                candidates.append(href)
-    if not candidates:
-        # Fallback: scan the World Cup fixtures page
-        for path in (
-            "/football/world/world-cup/",
-            "/football/world/world-cup/fixtures/",
-        ):
-            r = _get(client, BASE + path)
-            if not r:
-                continue
-            soup = BeautifulSoup(r.text, "lxml")
-            for a in soup.select("a[href*='/football/']"):
-                text = _norm(a.get_text(" "))
-                if _norm(team1) in text and _norm(team2) in text:
-                    candidates.append(a.get("href", ""))
-            if candidates:
-                break
+                candidates.append(a.get("href", ""))
+        if candidates:
+            break
     if not candidates:
         return None
     url = candidates[0]

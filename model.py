@@ -150,12 +150,23 @@ def build_prediction(api_data: dict, home_stats: dict, away_stats: dict) -> dict
     elif home_stats and away_stats:
         lh = home_stats.get("goals_for_per_match") or 1.2
         la = away_stats.get("goals_for_per_match") or 1.2
-        pred["sources"].add("Sofascore team stats")
+        label = home_stats.get("source_name", "Sofascore")
+        pred["sources"].add(f"{label} team stats")
 
     if lh is not None:
-        fh_h = home_stats.get("first_half_goal_share", 0.45) if home_stats else 0.45
-        fh_a = away_stats.get("first_half_goal_share", 0.45) if away_stats else 0.45
-        (lh1, la1), (lh2, la2) = split_halves(lh, la, fh_h, fh_a)
+        # Half split: prefer bookmaker first-half 1X2 odds (paid API-Football
+        # plans), else use each team's empirical first-half goal share.
+        fhw = implied_probs(odds.get("first_half_winner", {}))
+        if {"home", "draw", "away"} <= fhw.keys():
+            lh1, la1 = fit_lambdas(fhw["home"], fhw["draw"], fhw["away"])
+            # First-half lambdas can't exceed the full-match ones
+            lh1, la1 = min(lh1, lh * 0.8), min(la1, la * 0.8)
+            lh2, la2 = max(lh - lh1, 0.05), max(la - la1, 0.05)
+            pred["sources"].add("API-Football 1H odds")
+        else:
+            fh_h = home_stats.get("first_half_goal_share", 0.45) if home_stats else 0.45
+            fh_a = away_stats.get("first_half_goal_share", 0.45) if away_stats else 0.45
+            (lh1, la1), (lh2, la2) = split_halves(lh, la, fh_h, fh_a)
         pred["sections"]["first_half"] = {
             "scores": [(s, round(p * 100, 1)) for s, p in top_scores(lh1, la1)]
         }
@@ -168,7 +179,8 @@ def build_prediction(api_data: dict, home_stats: dict, away_stats: dict) -> dict
     hp = home_stats.get("players", {}) if home_stats else {}
     ap = away_stats.get("players", {}) if away_stats else {}
     if hp or ap:
-        pred["sources"].add("Sofascore player stats")
+        label = (home_stats or away_stats).get("source_name", "Sofascore")
+        pred["sources"].add(f"{label} player stats")
         if lh is not None:
             scorers = first_scorer_probs(hp, ap, lh, la)
             if scorers:
