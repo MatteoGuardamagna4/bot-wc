@@ -34,13 +34,43 @@ SECTION_TITLES = {
 ALL_SECTIONS = list(SECTION_TITLES)
 
 
+class MatchNotFoundError(Exception):
+    """The requested match is not in the upcoming World Cup schedule
+    (or the schedule could not be verified). Message is user-facing."""
+
+
 def run_analysis(team1: str, team2: str) -> str:
-    """Full pipeline. Returns the formatted Telegram message."""
-    # 1) API-Football: fixture + odds
+    """Full pipeline. Returns the formatted Telegram message.
+
+    Raises MatchNotFoundError if the match is not in the upcoming
+    World Cup schedule.
+    """
+    # 1) API-Football: fixture + odds. The fixture MUST exist in the
+    #    official WC calendar — otherwise we refuse to analyze.
     api_data = api_football.get_match_data(team1, team2)
-    fx = api_data.get("fixture") or {}
+    fx = api_data.get("fixture")
+    if not fx:
+        if not api_football.schedule_available():
+            raise MatchNotFoundError(
+                "I can't verify the World Cup schedule right now "
+                "(data provider unreachable). Please try again later."
+            )
+        raise MatchNotFoundError(
+            f"{team1} vs {team2} is not in the upcoming World Cup schedule. "
+            "Check the team names and the official calendar."
+        )
     home = fx.get("home", team1)
     away = fx.get("away", team2)
+
+    # 1b) Official lineups (published ~1h before kickoff). If available,
+    #     player suggestions are restricted to players actually playing.
+    raw_lineups = api_football.get_lineups(fx["fixture_id"])
+    lineups: dict | None = None
+    if raw_lineups:
+        lineups = {
+            "home": raw_lineups.get(fx.get("home_id")) or {},
+            "away": raw_lineups.get(fx.get("away_id")) or {},
+        }
 
     # 2) Player stats: API-Football events first (single source, uses the
     #    team ids already resolved by the fixture lookup — no name matching).
@@ -56,8 +86,8 @@ def run_analysis(team1: str, team2: str) -> str:
     home_stats = team_stats(fx.get("home_id"), home)
     away_stats = team_stats(fx.get("away_id"), away)
 
-    # 3) Statistical model
-    pred = build_prediction(api_data, home_stats, away_stats)
+    # 3) Statistical model (lineup-aware when official lineups are out)
+    pred = build_prediction(api_data, home_stats, away_stats, lineups)
     sections = pred["sections"]
     missing = [s for s in ALL_SECTIONS if s not in sections]
 
@@ -67,7 +97,7 @@ def run_analysis(team1: str, team2: str) -> str:
         scraped = {}
         if "first_half" in missing or "second_half" in missing:
             scraped = scrape_match_odds(home, away)  # extra context for the AI
-        ai_sections = ai_fill_sections(home, away, missing, pred, scraped)
+        ai_sections = ai_fill_sections(home, away, missing, pred, scraped, lineups)
 
     return format_message(home, away, pred, ai_sections)
 
@@ -149,18 +179,29 @@ requested section names. Formats:
 - "scorers": "1. Player — first scorer 18%\\n2. Player — 14%\\n3. Player — 11%"
 - "first_card": "Player (22%)\\nAlt: Player (15%)"
 - "first_sub": "Player (35%)\\nAlt: Player (25%)"
+If "official_lineups" is present in the context, suggest ONLY players from
+those lists: starters for first_card/first_sub; starters or substitutes for
+scorers. Never name a player who is not in the lineups.
 """
 
 
 def ai_fill_sections(
-    home: str, away: str, missing: list[str], pred: dict, scraped: dict
+    home: str,
+    away: str,
+    missing: list[str],
+    pred: dict,
+    scraped: dict,
+    lineups: dict | None = None,
 ) -> dict[str, str]:
     """Ask GPT-4o to fill only the missing sections. Returns {} on failure."""
     try:
         client = OpenAI(api_key=OPENAI_API_KEY)
         context = {
+            # lineups first: the user-message context gets truncated at 4000
+            # chars and the lineups constraint must never be cut off
+            "official_lineups": lineups,
             "computed_sections": {k: v for k, v in pred["sections"].items()},
-            "scraped_odds": json.dumps(scraped)[:3000] if scraped else None,
+            "scraped_odds": json.dumps(scraped)[:2000] if scraped else None,
         }
         resp = client.chat.completions.create(
             model=OPENAI_MODEL,

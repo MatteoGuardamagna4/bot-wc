@@ -24,7 +24,7 @@ from telegram.ext import (
     ContextTypes,
 )
 
-from analyzer import run_analysis
+from analyzer import MatchNotFoundError, run_analysis
 from config import ACCESS_CODE, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, resolve_team
 
 logging.basicConfig(
@@ -137,6 +137,9 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         # Run blocking data pipeline (APIs + model + optional AI) off the event loop
         message = await asyncio.to_thread(run_analysis, team1, team2)
         await update.message.reply_text(message)
+    except MatchNotFoundError as e:
+        log.info("Match not found: %s vs %s (%s)", team1, team2, e)
+        await update.message.reply_text(f"❌ {e}")
     except Exception as e:  # never leave the user without a reply
         log.exception("Analysis failed")
         await update.message.reply_text(f"❌ Analysis failed: {e}")

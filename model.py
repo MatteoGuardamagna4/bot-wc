@@ -4,9 +4,42 @@ No AI involved: everything here is computed from real data.
 """
 from __future__ import annotations
 
+import unicodedata
 from math import exp, factorial
 
 MAX_GOALS = 7
+
+
+# ------------------------------------------------------------ lineup filter
+
+
+def _norm_name(s: str) -> str:
+    """Normalize a player name for matching: accents off, dots out, casefold."""
+    s = unicodedata.normalize("NFKD", s)
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    return " ".join(s.replace(".", " ").casefold().split())
+
+
+def _names_match(a: str, b: str) -> bool:
+    """Tolerant match between two normalized names.
+
+    Handles source differences like 'L. Messi' vs 'Lionel Messi':
+    exact / containment, or same last name + same first initial.
+    """
+    if a == b or a in b or b in a:
+        return True
+    ta, tb = a.split(), b.split()
+    return bool(ta and tb) and ta[-1] == tb[-1] and ta[0][:1] == tb[0][:1]
+
+
+def filter_to_lineup(players: dict, allowed_names: list[str]) -> dict:
+    """Keep only the players that appear in the official lineup list."""
+    allowed = [_norm_name(n) for n in allowed_names]
+    return {
+        name: st
+        for name, st in players.items()
+        if any(_names_match(_norm_name(name), a) for a in allowed)
+    }
 
 
 def poisson_pmf(k: int, lam: float) -> float:
@@ -135,8 +168,18 @@ def first_sub_probs(
     return [(n, round(w / total * 100, 1)) for n, w in ranked[:top_n]]
 
 
-def build_prediction(api_data: dict, home_stats: dict, away_stats: dict) -> dict:
-    """Combine everything into one prediction dict with per-section sources."""
+def build_prediction(
+    api_data: dict,
+    home_stats: dict,
+    away_stats: dict,
+    lineups: dict | None = None,
+) -> dict:
+    """Combine everything into one prediction dict with per-section sources.
+
+    lineups (optional): {"home": {"starters": [...], "subs": [...]},
+                         "away": {...}} — official lineups. When present,
+    player markets only include players actually in the squad.
+    """
     pred: dict = {"sections": {}, "sources": set()}
 
     # --- Expected goals: from odds first, else from team stats ---
@@ -175,20 +218,41 @@ def build_prediction(api_data: dict, home_stats: dict, away_stats: dict) -> dict
         }
         pred["lambdas"] = (round(lh, 2), round(la, 2))
 
-    # --- Player markets: from Sofascore incidents ---
+    # --- Player markets: from recent-match player stats ---
     hp = home_stats.get("players", {}) if home_stats else {}
     ap = away_stats.get("players", {}) if away_stats else {}
+
+    # Official lineups (if published): never suggest players who aren't
+    # playing. Scorers may come from the whole squad (starters + bench);
+    # first card / first sub can only involve starters.
+    hp_squad, ap_squad = hp, ap      # starters + bench
+    hp_start, ap_start = hp, ap      # starters only
+    lineup_applied = False
+    if lineups:
+        h_lu = lineups.get("home") or {}
+        a_lu = lineups.get("away") or {}
+        if h_lu.get("starters"):
+            hp_start = filter_to_lineup(hp, h_lu["starters"])
+            hp_squad = filter_to_lineup(hp, h_lu["starters"] + (h_lu.get("subs") or []))
+            lineup_applied = True
+        if a_lu.get("starters"):
+            ap_start = filter_to_lineup(ap, a_lu["starters"])
+            ap_squad = filter_to_lineup(ap, a_lu["starters"] + (a_lu.get("subs") or []))
+            lineup_applied = True
+    if lineup_applied:
+        pred["sources"].add("official lineups")
+
     if hp or ap:
         label = (home_stats or away_stats).get("source_name", "Sofascore")
         pred["sources"].add(f"{label} player stats")
         if lh is not None:
-            scorers = first_scorer_probs(hp, ap, lh, la)
+            scorers = first_scorer_probs(hp_squad, ap_squad, lh, la)
             if scorers:
                 pred["sections"]["scorers"] = scorers
-        cards = first_card_probs(hp, ap)
+        cards = first_card_probs(hp_start, ap_start)
         if cards:
             pred["sections"]["first_card"] = cards
-        subs = first_sub_probs(hp, ap)
+        subs = first_sub_probs(hp_start, ap_start)
         if subs:
             pred["sections"]["first_sub"] = subs
 

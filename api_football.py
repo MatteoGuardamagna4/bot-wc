@@ -6,6 +6,7 @@ dozens of bookmakers (1X2, over/under, first-half markets).
 from __future__ import annotations
 
 import logging
+import time
 from statistics import mean
 
 import httpx
@@ -19,9 +20,12 @@ HEADERS = {"x-apisports-key": API_FOOTBALL_KEY}
 
 WC_LEAGUE_ID = 1  # FIFA World Cup
 WC_SEASON = 2026
+WC_SCHEDULE_TTL = 900  # re-fetch the WC calendar every 15 min
 
 _team_id_cache: dict[str, int] = {}
 _wc_teams_cache: list[dict] | None = None
+_wc_fixtures_cache: list[dict] | None = None
+_wc_fixtures_ts = 0.0
 
 
 def _get(path: str, params: dict) -> list:
@@ -86,54 +90,60 @@ def find_team_id(name: str) -> int | None:
     return best
 
 
-def find_fixture(team1: str, team2: str) -> dict | None:
-    """Find the next fixture between two teams. Returns fixture dict or None.
+def wc_fixtures() -> list[dict]:
+    """Full FIFA World Cup 2026 calendar (1 request, cached 15 min).
 
-    Note: the 'next'/'last' parameters are PAID-plan only, so we fetch the
-    plain head-to-head list and filter upcoming fixtures client-side.
-    The free plan also only covers past seasons (2021-2023): if no upcoming
-    fixture is returned, we log it and the pipeline falls back to Sofascore.
+    Used both to find fixtures and to validate that a requested match
+    actually exists in the schedule. Returns [] if the API is unreachable
+    (a stale cache, if any, is served instead).
     """
-    import time as _time
+    global _wc_fixtures_cache, _wc_fixtures_ts
+    if _wc_fixtures_cache is not None and time.time() - _wc_fixtures_ts < WC_SCHEDULE_TTL:
+        return _wc_fixtures_cache
+    resp = _get("/fixtures", {"league": WC_LEAGUE_ID, "season": WC_SEASON})
+    if resp:
+        _wc_fixtures_cache, _wc_fixtures_ts = resp, time.time()
+        return resp
+    return _wc_fixtures_cache or []
 
+
+def schedule_available() -> bool:
+    """True if the WC calendar could be fetched (lets callers distinguish
+    'match not in schedule' from 'schedule service down')."""
+    return bool(wc_fixtures())
+
+
+def find_fixture(team1: str, team2: str) -> dict | None:
+    """Find the upcoming WORLD CUP fixture between two teams.
+
+    Only the official WC 2026 calendar is searched: if the match is not in
+    the upcoming schedule, None is returned and the analyzer raises a
+    user-facing MatchNotFoundError (no head-to-head/friendly fallback).
+    """
     id1, id2 = find_team_id(team1), find_team_id(team2)
     if not id1 or not id2:
         log.warning(
-            "API-Football: team id not found (%s=%s, %s=%s) — skipping odds.",
+            "API-Football: team id not found (%s=%s, %s=%s).",
             team1, id1, team2, id2,
         )
         return None
 
-    now = _time.time()
-
-    def _upcoming(fixtures: list, opponent_id: int | None = None) -> list:
-        out = []
-        for f in fixtures:
-            fix = f.get("fixture", {})
-            teams = f.get("teams", {})
-            ids = {teams.get("home", {}).get("id"), teams.get("away", {}).get("id")}
-            if opponent_id is not None and opponent_id not in ids:
-                continue
-            if fix.get("timestamp", 0) >= now - 6 * 3600 and fix.get("status", {}).get(
-                "short"
-            ) in ("NS", "TBD"):
-                out.append(f)
-        out.sort(key=lambda f: f["fixture"]["timestamp"])
-        return out
-
-    # 1) World Cup 2026 calendar (most reliable for tournament games)
-    resp = _get(
-        "/fixtures", {"league": WC_LEAGUE_ID, "season": WC_SEASON, "team": id1}
-    )
-    upcoming = _upcoming(resp, opponent_id=id2)
-
-    # 2) Fallback: head-to-head history (covers friendlies etc.)
-    if not upcoming:
-        resp = _get("/fixtures/headtohead", {"h2h": f"{id1}-{id2}"})
-        upcoming = _upcoming(resp)
+    now = time.time()
+    upcoming = []
+    for f in wc_fixtures():
+        fix = f.get("fixture", {})
+        teams = f.get("teams", {})
+        ids = {teams.get("home", {}).get("id"), teams.get("away", {}).get("id")}
+        if not {id1, id2} <= ids:
+            continue
+        if fix.get("timestamp", 0) >= now - 6 * 3600 and fix.get("status", {}).get(
+            "short"
+        ) in ("NS", "TBD"):
+            upcoming.append(f)
+    upcoming.sort(key=lambda f: f["fixture"]["timestamp"])
 
     if not upcoming:
-        log.info("API-Football: no upcoming %s-%s fixture found.", team1, team2)
+        log.info("API-Football: no upcoming WC fixture %s-%s.", team1, team2)
         return None
     fx = upcoming[0]
     return {
@@ -190,6 +200,44 @@ def get_odds(fixture_id: int) -> dict:
     out: dict = {"bookmakers": n_bookies}
     for market, keys in buckets.items():
         out[market] = {k: round(mean(v), 3) for k, v in keys.items() if v}
+    return out
+
+
+def get_lineups(fixture_id: int) -> dict:
+    """Official lineups, published ~20-60 min before kickoff.
+
+    Returns {team_id: {"formation": str, "starters": [names], "subs": [names]}}
+    or {} if lineups are not (yet) available.
+    """
+    resp = _get("/fixtures/lineups", {"fixture": fixture_id})
+    out: dict[int, dict] = {}
+    for item in resp:
+        tid = (item.get("team") or {}).get("id")
+        if not tid:
+            continue
+
+        def names(key: str) -> list[str]:
+            return [
+                n
+                for n in (
+                    ((x or {}).get("player") or {}).get("name")
+                    for x in item.get(key) or []
+                )
+                if n
+            ]
+
+        out[tid] = {
+            "formation": item.get("formation"),
+            "starters": names("startXI"),
+            "subs": names("substitutes"),
+        }
+    if out:
+        log.info(
+            "API-Football: official lineups available for fixture %s (%d teams)",
+            fixture_id, len(out),
+        )
+    else:
+        log.info("API-Football: no official lineups yet for fixture %s", fixture_id)
     return out
 
 
