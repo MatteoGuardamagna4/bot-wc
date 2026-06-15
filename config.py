@@ -10,6 +10,9 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY", "")
 ACCESS_CODE = os.getenv("ACCESS_CODE", "")
+# Secret used to sign the web dashboard's session cookie. Must be stable
+# across restarts/workers — set it in .env (any long random string).
+FLASK_SECRET = os.getenv("FLASK_SECRET", "") or (ACCESS_CODE + "-wc-dashboard")
 # Sofascore is blocked (403) on many IPs — disabled by default.
 # Set SOFASCORE_ENABLED=true in .env to re-enable it as ESPN backup.
 SOFASCORE_ENABLED = os.getenv("SOFASCORE_ENABLED", "false").strip().lower() == "true"

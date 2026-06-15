@@ -1,9 +1,10 @@
 """Analysis pipeline.
 
 Order of preference:
-  1. API-Football odds  → Poisson model → half scores
-  2. Sofascore stats    → player markets (scorers, cards, subs) + lambda fallback
-  3. Betexplorer scrape → raw context (only if 1-2 fail)
+  1. API-Football odds  → Poisson model → full-time result + half scores
+  2. Player stats (API-Football events → ESPN → Sofascore) → scorer/card/sub
+     markets, plus an expected-goals fallback when odds are missing
+  3. Betexplorer scrape → raw context for the AI (only if score data missing)
   4. GPT-4o             → ONLY to fill sections that data could not cover
 
 The final message is built in Python from real numbers whenever possible.
@@ -25,6 +26,7 @@ from scraper import scrape_match_odds
 log = logging.getLogger(__name__)
 
 SECTION_TITLES = {
+    "final_result": "🏁 FINAL RESULT",
     "first_half": "🕐 FIRST HALF",
     "second_half": "🕑 SECOND HALF",
     "scorers": "🎯 GOALSCORERS",
@@ -39,25 +41,56 @@ class MatchNotFoundError(Exception):
     (or the schedule could not be verified). Message is user-facing."""
 
 
-def run_analysis(team1: str, team2: str) -> str:
-    """Full pipeline. Returns the formatted Telegram message.
+def analyze(team1: str, team2: str) -> dict:
+    """Full pipeline. Returns structured prediction data:
 
-    Raises MatchNotFoundError if the match is not in the upcoming
-    World Cup schedule.
+        {"home", "away", "date", "pred", "ai_sections"}
+
+    where ``pred`` is the model dict (sections/sources/lambdas) and
+    ``ai_sections`` holds AI-filled strings for any markets the data could
+    not cover. Raises MatchNotFoundError if the match is not in the upcoming
+    World Cup schedule. Used by both the Telegram bot (via run_analysis) and
+    the web dashboard.
     """
     # 1) API-Football: fixture + odds. The fixture MUST exist in the
     #    official WC calendar — otherwise we refuse to analyze.
     api_data = api_football.get_match_data(team1, team2)
     fx = api_data.get("fixture")
     if not fx:
-        if not api_football.schedule_available():
-            raise MatchNotFoundError(
+        reason = api_data.get("reason")
+        # A team can fail to resolve simply because the data provider is down;
+        # prefer the clearer "provider unreachable" message in that case.
+        if reason == "team_not_found" and not api_football.schedule_available():
+            reason = "schedule_unavailable"
+        messages = {
+            "schedule_unavailable": (
                 "I can't verify the World Cup schedule right now "
                 "(data provider unreachable). Please try again later."
-            )
+            ),
+            "team_not_found": (
+                f"I couldn't recognize one of the teams: '{team1}' / '{team2}'. "
+                "Check the spelling or use the 3-letter code (e.g. ESP, CPV)."
+            ),
+            "not_scheduled": (
+                f"{team1} vs {team2} is not a scheduled World Cup match. "
+                "The two teams aren't drawn to meet in the group stage, or a "
+                "knockout pairing between them hasn't been set yet."
+            ),
+            "already_played": (
+                f"{team1} vs {team2} has already been played — pre-match "
+                "predictions are no longer available for it."
+            ),
+            "live": (
+                f"{team1} vs {team2} is being played right now, so pre-match "
+                "predictions are no longer available."
+            ),
+        }
         raise MatchNotFoundError(
-            f"{team1} vs {team2} is not in the upcoming World Cup schedule. "
-            "Check the team names and the official calendar."
+            messages.get(reason)
+            or (
+                f"{team1} vs {team2} is not in the upcoming World Cup schedule. "
+                "Check the team names and the official calendar."
+            )
         )
     home = fx.get("home", team1)
     away = fx.get("away", team2)
@@ -95,21 +128,58 @@ def run_analysis(team1: str, team2: str) -> str:
     ai_sections: dict[str, str] = {}
     if missing:
         scraped = {}
-        if "first_half" in missing or "second_half" in missing:
+        if any(k in missing for k in ("final_result", "first_half", "second_half")):
             scraped = scrape_match_odds(home, away)  # extra context for the AI
         ai_sections = ai_fill_sections(home, away, missing, pred, scraped, lineups)
 
-    return format_message(home, away, pred, ai_sections)
+    return {
+        "home": home,
+        "away": away,
+        "date": fx.get("date"),
+        "pred": pred,
+        "ai_sections": ai_sections,
+    }
+
+
+def run_analysis(team1: str, team2: str) -> str:
+    """Full pipeline. Returns the formatted Telegram message.
+
+    Raises MatchNotFoundError if the match is not in the upcoming
+    World Cup schedule.
+    """
+    r = analyze(team1, team2)
+    return format_message(r["home"], r["away"], r["pred"], r["ai_sections"])
 
 
 # ---------------------------------------------------------------- formatting
 
 
+def _fmt_final_result(results: list) -> str:
+    """Render the 4 most likely full-time scorelines with odds.
+
+    results: [{"score","prob","odd","odd_source"}, ...]. A '*' marks an odd
+    derived from the model (no bookmaker quote for that exact scoreline).
+    """
+    lines = []
+    for i, r in enumerate(results, 1):
+        odd = r.get("odd")
+        if odd is None:
+            odd_txt = ""
+        else:
+            star = "*" if r.get("odd_source") == "model" else ""
+            odd_txt = f" @ {odd}{star}"
+        lines.append(f"{i}. {r['score']} — {r['prob']}%{odd_txt}")
+    if any(r.get("odd_source") == "model" for r in results):
+        lines.append("(* fair odds from model — no bookmaker quote)")
+    return "\n".join(lines)
+
+
 def _fmt_scores(scores: list) -> str:
-    main = f"Most likely score: {scores[0][0]} ({scores[0][1]}%)"
+    """Render a half's most-likely scoreline(s)."""
+    body = f"Most likely: {scores[0][0]} ({scores[0][1]}%)"
     if len(scores) > 1:
-        main += f"\nAlt: {scores[1][0]} ({scores[1][1]}%)"
-    return main
+        body += f"\nAlt: {scores[1][0]} ({scores[1][1]}%)"
+    return body
 
 
 def _fmt_players(items: list, first_label: str = "") -> str:
@@ -117,6 +187,17 @@ def _fmt_players(items: list, first_label: str = "") -> str:
     for i, (name, pct) in enumerate(items, 1):
         label = f" — {first_label} " if (i == 1 and first_label) else " — "
         lines.append(f"{i}. {name}{label}{pct}%")
+    return "\n".join(lines)
+
+
+def _fmt_team_players(section: dict, home: str, away: str) -> str:
+    """Render per-team picks, one line per team: 'Team: Player 22%, Player 12%'."""
+    lines = []
+    for side, label in (("home", home), ("away", away)):
+        items = section.get(side) or []
+        if items:
+            inner = ", ".join(f"{name} {pct}%" for name, pct in items)
+            lines.append(f"{label}: {inner}")
     return "\n".join(lines)
 
 
@@ -128,6 +209,11 @@ def format_message(home: str, away: str, pred: dict, ai_sections: dict) -> str:
         if body:
             parts.append(f"\n{SECTION_TITLES[key]}\n{body}")
 
+    section(
+        "final_result",
+        _fmt_final_result(s["final_result"]["results"]) if "final_result" in s
+        else ai_sections.get("final_result"),
+    )
     section(
         "first_half",
         _fmt_scores(s["first_half"]["scores"]) if "first_half" in s
@@ -143,20 +229,16 @@ def format_message(home: str, away: str, pred: dict, ai_sections: dict) -> str:
         _fmt_players(s["scorers"], "first scorer") if "scorers" in s
         else ai_sections.get("scorers"),
     )
-    if "first_card" in s:
-        body = f"{s['first_card'][0][0]} ({s['first_card'][0][1]}%)"
-        if len(s["first_card"]) > 1:
-            body += f"\nAlt: {s['first_card'][1][0]} ({s['first_card'][1][1]}%)"
-        section("first_card", body)
-    else:
-        section("first_card", ai_sections.get("first_card"))
-    if "first_sub" in s:
-        body = f"{s['first_sub'][0][0]} ({s['first_sub'][0][1]}%)"
-        if len(s["first_sub"]) > 1:
-            body += f"\nAlt: {s['first_sub'][1][0]} ({s['first_sub'][1][1]}%)"
-        section("first_sub", body)
-    else:
-        section("first_sub", ai_sections.get("first_sub"))
+    section(
+        "first_card",
+        _fmt_team_players(s["first_card"], home, away) if "first_card" in s
+        else ai_sections.get("first_card"),
+    )
+    section(
+        "first_sub",
+        _fmt_team_players(s["first_sub"], home, away) if "first_sub" in s
+        else ai_sections.get("first_sub"),
+    )
 
     sources = list(pred["sources"])
     if ai_sections:
@@ -175,10 +257,13 @@ You are a football analyst. You will be asked to fill ONLY specific missing
 prediction sections for a World Cup match. Use realistic, calibrated
 percentages. Respond ONLY with a JSON object whose keys are exactly the
 requested section names. Formats:
-- "first_half"/"second_half": "Most likely score: 1-0 (28%)\\nAlt: 0-0 (24%)"
+- "final_result": "1. 1-0 — 18%\\n2. 1-1 — 14%\\n3. 2-1 — 11%\\n4. 0-0 — 10%"
+  (the 4 most likely FULL-TIME scorelines with probabilities; no odds)
+- "first_half"/"second_half": "Most likely: 1-0 (28%)\\nAlt: 0-0 (24%)"
 - "scorers": "1. Player — first scorer 18%\\n2. Player — 14%\\n3. Player — 11%"
-- "first_card": "Player (22%)\\nAlt: Player (15%)"
-- "first_sub": "Player (35%)\\nAlt: Player (25%)"
+- "first_card"/"first_sub": one line PER TEAM, using the real team names, with
+  the 2 most likely players each:
+  "HomeTeam: Player 22%, Player 12%\\nAwayTeam: Player 18%, Player 9%"
 If "official_lineups" is present in the context, suggest ONLY players from
 those lists: starters for first_card/first_sub; starters or substitutes for
 scorers. Never name a player who is not in the lineups.

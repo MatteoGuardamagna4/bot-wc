@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>World Cup Predictions</title>
+<style>
+  :root {
+    --bg: #0e1116; --card: #161b22; --card2: #1c232c; --line: #2a323d;
+    --txt: #e6edf3; --muted: #9aa7b4; --accent: #2ea043; --accent2: #388bfd;
+    --warn: #d29922;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--txt);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.5;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 20px 16px 60px; }
+  header.top {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 18px;
+  }
+  header.top h1 { font-size: 20px; margin: 0; }
+  header.top .sub { color: var(--muted); font-size: 13px; }
+  button {
+    font: inherit; cursor: pointer; border: none; border-radius: 8px;
+    padding: 10px 14px; background: var(--accent); color: #fff; font-weight: 600;
+  }
+  button.ghost { background: transparent; border: 1px solid var(--line); color: var(--muted); padding: 6px 12px; font-weight: 500; }
+  button:disabled { opacity: .5; cursor: default; }
+  input {
+    font: inherit; width: 100%; padding: 12px 14px; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--card2); color: var(--txt);
+  }
+  .hidden { display: none !important; }
+  .muted { color: var(--muted); }
+  .err { color: #f85149; font-size: 14px; margin-top: 8px; min-height: 18px; }
+
+  /* login */
+  .login { max-width: 360px; margin: 12vh auto 0; text-align: center; }
+  .login h1 { font-size: 22px; }
+  .login form { display: flex; flex-direction: column; gap: 12px; margin-top: 18px; }
+
+  /* match list */
+  .date-group { margin-top: 18px; }
+  .date-group h2 {
+    font-size: 13px; text-transform: uppercase; letter-spacing: .06em;
+    color: var(--muted); margin: 0 0 8px; font-weight: 600;
+  }
+  .match {
+    width: 100%; text-align: left; background: var(--card); color: var(--txt);
+    border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px;
+    margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between;
+    font-weight: 500; transition: border-color .15s, background .15s;
+  }
+  .match:hover { border-color: var(--accent2); background: var(--card2); }
+  .match .teams { font-size: 16px; }
+  .match .time { color: var(--muted); font-size: 13px; font-weight: 400; }
+
+  /* prediction */
+  .pred-head { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
+  .pred-head h2 { font-size: 19px; margin: 0; }
+  .pred-date { color: var(--muted); font-size: 13px; margin-bottom: 16px; }
+  .section { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin-bottom: 12px; }
+  .section h3 { margin: 0 0 10px; font-size: 15px; }
+  .row { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; }
+  .row .l { color: var(--txt); }
+  .row .r { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .pill { display: inline-block; background: var(--card2); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .teamblock { margin: 6px 0; }
+  .teamblock .tname { font-size: 13px; color: var(--accent2); font-weight: 600; margin-bottom: 2px; }
+  .ai-note { color: var(--warn); font-size: 12px; }
+  pre.aitext { white-space: pre-wrap; margin: 0; font-family: inherit; color: var(--txt); }
+  .sources { color: var(--muted); font-size: 12px; margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
+  .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; vertical-align: middle; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .center { text-align: center; padding: 40px 0; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- LOGIN -->
+  <div id="login" class="login hidden">
+    <h1>⚽ World Cup Predictions</h1>
+    <p class="muted">Enter your access code to continue.</p>
+    <form id="loginForm">
+      <input id="codeInput" type="password" placeholder="Access code" autocomplete="current-password" />
+      <button type="submit">Enter</button>
+    </form>
+    <div id="loginErr" class="err"></div>
+  </div>
+
+  <!-- DASHBOARD -->
+  <div id="app" class="hidden">
+    <header class="top">
+      <div>
+        <h1>⚽ World Cup Predictions</h1>
+        <div class="sub">Pick an upcoming match to see the prediction</div>
+      </div>
+      <button class="ghost" id="logoutBtn">Log out</button>
+    </header>
+
+    <!-- match list view -->
+    <div id="matchesView">
+      <div id="matchesList"><div class="center"><span class="spinner"></span> Loading matches…</div></div>
+    </div>
+
+    <!-- prediction view -->
+    <div id="predView" class="hidden">
+      <div class="pred-head">
+        <button class="ghost" id="backBtn">← Back</button>
+      </div>
+      <div id="predContent"></div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const TITLES = {
+  final_result: "🏁 Final result",
+  first_half: "🕐 First half",
+  second_half: "🕑 Second half",
+  scorers: "🎯 Goalscorers",
+  first_card: "🟨 First card",
+  first_sub: "🔄 First substitution",
+};
+const ORDER = ["final_result", "first_half", "second_half", "scorers", "first_card", "first_sub"];
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => (
+  { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  let body = {};
+  try { body = await r.json(); } catch (e) {}
+  return { ok: r.ok, status: r.status, body };
+}
+
+// ---------- auth / boot ----------
+async function boot() {
+  const { body } = await api("/api/session");
+  if (body.authed) showApp();
+  else $("login").classList.remove("hidden");
+}
+
+$("loginForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  $("loginErr").textContent = "";
+  const code = $("codeInput").value;
+  const { ok, body } = await api("/api/login", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code }),
+  });
+  if (ok) { $("login").classList.add("hidden"); showApp(); }
+  else $("loginErr").textContent = body.error || "Login failed.";
+});
+
+$("logoutBtn").addEventListener("click", async () => {
+  await api("/api/logout", { method: "POST" });
+  location.reload();
+});
+
+$("backBtn").addEventListener("click", () => {
+  $("predView").classList.add("hidden");
+  $("matchesView").classList.remove("hidden");
+});
+
+function showApp() {
+  $("app").classList.remove("hidden");
+  loadMatches();
+}
+
+// ---------- matches ----------
+async function loadMatches() {
+  const { ok, body } = await api("/api/matches");
+  const el = $("matchesList");
+  if (!ok) { el.innerHTML = `<div class="center">${esc(body.error || "Could not load matches.")}</div>`; return; }
+  const matches = body.matches || [];
+  if (!matches.length) { el.innerHTML = `<div class="center">No upcoming matches found.</div>`; return; }
+
+  const groups = {};
+  for (const m of matches) {
+    const d = m.date ? new Date(m.date) : null;
+    const key = d ? d.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" }) : "Scheduled";
+    (groups[key] = groups[key] || []).push(m);
+  }
+  let html = "";
+  for (const [day, ms] of Object.entries(groups)) {
+    html += `<div class="date-group"><h2>${esc(day)}</h2>`;
+    for (const m of ms) {
+      const d = m.date ? new Date(m.date) : null;
+      const time = d ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+      html += `<button class="match" data-home="${esc(m.home)}" data-away="${esc(m.away)}">
+        <span class="teams">${esc(m.home)} <span class="muted">vs</span> ${esc(m.away)}</span>
+        <span class="time">${esc(time)}</span></button>`;
+    }
+    html += `</div>`;
+  }
+  el.innerHTML = html;
+  el.querySelectorAll(".match").forEach((b) =>
+    b.addEventListener("click", () => selectMatch(b.dataset.home, b.dataset.away)));
+}
+
+// ---------- prediction ----------
+async function selectMatch(home, away) {
+  $("matchesView").classList.add("hidden");
+  $("predView").classList.remove("hidden");
+  $("predContent").innerHTML =
+    `<div class="center"><span class="spinner"></span> Analyzing ${esc(home)} vs ${esc(away)}… (this can take up to a minute)</div>`;
+
+  const { ok, body } = await api(`/api/predict?home=${encodeURIComponent(home)}&away=${encodeURIComponent(away)}`);
+  if (!ok) { $("predContent").innerHTML = `<div class="section"><div class="err">${esc(body.error || "Prediction failed.")}</div></div>`; return; }
+  renderPrediction(body);
+}
+
+function renderPrediction(d) {
+  const s = d.sections || {}, ai = d.ai_sections || {};
+  let html = `<h2>${esc(d.home)} <span class="muted">vs</span> ${esc(d.away)}</h2>`;
+  if (d.date) html += `<div class="pred-date">${esc(new Date(d.date).toLocaleString())}</div>`;
+
+  for (const key of ORDER) {
+    let inner = null;
+    if (s[key]) inner = renderStructured(key, s[key], d);
+    else if (ai[key]) inner = `<pre class="aitext">${esc(ai[key])}</pre><div class="ai-note">⚠ estimated by AI (no data for this market)</div>`;
+    if (inner) html += `<div class="section"><h3>${TITLES[key]}</h3>${inner}</div>`;
+  }
+
+  let foot = "";
+  if (d.sources && d.sources.length) foot += `📊 Sources: ${esc(d.sources.join(", "))}`;
+  if (d.lambdas) foot += `<br>xG model: ${esc(d.home)} ${d.lambdas[0]} — ${esc(d.away)} ${d.lambdas[1]}`;
+  if (foot) html += `<div class="sources">${foot}</div>`;
+
+  $("predContent").innerHTML = html;
+}
+
+function renderStructured(key, data, d) {
+  if (key === "final_result") {
+    let any_model = false;
+    const rows = data.results.map((r, i) => {
+      const star = r.odd_source === "model" ? "*" : "";
+      if (star) any_model = true;
+      const odd = r.odd != null ? `<span class="pill">@ ${r.odd}${star}</span>` : "";
+      return `<div class="row"><span class="l">${i + 1}. ${esc(r.score)}</span>
+        <span class="r">${r.prob}% &nbsp; ${odd}</span></div>`;
+    }).join("");
+    return rows + (any_model ? `<div class="ai-note" style="color:var(--muted)">* fair odds from model — no bookmaker quote</div>` : "");
+  }
+  if (key === "first_half" || key === "second_half") {
+    return data.scores.map(([sc, p], i) =>
+      `<div class="row"><span class="l">${i === 0 ? "Most likely" : "Alt"}: ${esc(sc)}</span><span class="r">${p}%</span></div>`).join("");
+  }
+  if (key === "scorers") {
+    return data.map(([n, p], i) =>
+      `<div class="row"><span class="l">${i + 1}. ${esc(n)}${i === 0 ? " <span class='muted'>(first scorer)</span>" : ""}</span><span class="r">${p}%</span></div>`).join("");
+  }
+  if (key === "first_card" || key === "first_sub") {
+    let html = "";
+    for (const [side, label] of [["home", d.home], ["away", d.away]]) {
+      const items = data[side];
+      if (!items || !items.length) continue;
+      html += `<div class="teamblock"><div class="tname">${esc(label)}</div>` +
+        items.map(([n, p]) => `<div class="row"><span class="l">${esc(n)}</span><span class="r">${p}%</span></div>`).join("") +
+        `</div>`;
+    }
+    return html;
+  }
+  return "";
+}
+
+boot();
+</script>
+</body>
+</html>

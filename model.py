@@ -102,6 +102,41 @@ def top_scores(lh: float, la: float, k: int = 2) -> list[tuple[str, float]]:
     return flat[:k]
 
 
+def _score_key(s: str) -> str:
+    """Normalize a scoreline so '1:0', '1-0', ' 1 - 0 ' all compare equal."""
+    return s.replace(":", "-").replace(" ", "").strip()
+
+
+def final_results(
+    lh: float,
+    la: float,
+    correct_score_odds: dict[str, float] | None = None,
+    k: int = 4,
+) -> tuple[list[dict], bool]:
+    """Top-k full-time scorelines with probability and odds.
+
+    Each item: {"score": "1-0", "prob": 18.2, "odd": 7.5, "odd_source": "book"}.
+    Odds use the real bookmaker Correct Score market when that exact score is
+    quoted, otherwise fair model-implied odds (1/probability). Returns
+    (results, any_book_odds_used).
+    """
+    book = {_score_key(k_): v for k_, v in (correct_score_odds or {}).items() if v}
+    any_book = False
+    out: list[dict] = []
+    for score, p in top_scores(lh, la, k):
+        odd = book.get(_score_key(score))
+        if odd:
+            any_book = True
+            src = "book"
+        else:
+            odd = round(1.0 / p, 2) if p > 0 else None
+            src = "model"
+        out.append(
+            {"score": score, "prob": round(p * 100, 1), "odd": odd, "odd_source": src}
+        )
+    return out, any_book
+
+
 def split_halves(
     lh: float, la: float, fh_share_home: float = 0.45, fh_share_away: float = 0.45
 ) -> tuple[tuple[float, float], tuple[float, float]]:
@@ -130,42 +165,63 @@ def first_scorer_probs(
 
 
 def first_card_probs(
-    home_players: dict, away_players: dict, top_n: int = 3
-) -> list[tuple[str, float]]:
-    """P(player gets first card) from empirical yellow-card shares."""
-    counts = {
-        name: st["yellows"]
-        for players in (home_players, away_players)
-        for name, st in players.items()
-        if st["yellows"] > 0
+    home_players: dict, away_players: dict, top_n: int = 2
+) -> dict[str, list[tuple[str, float]]]:
+    """The top_n players per team most likely to receive the first card.
+
+    Probabilities are P(player gets the match's first card) from empirical
+    yellow-card shares, normalized across BOTH teams (so home and away numbers
+    stay directly comparable), then grouped by team. Returns
+    {"home": [(name, pct), ...], "away": [...]} (empty if no card history).
+    """
+    sides = {
+        "home": {n: st["yellows"] for n, st in home_players.items() if st["yellows"] > 0},
+        "away": {n: st["yellows"] for n, st in away_players.items() if st["yellows"] > 0},
     }
-    total = sum(counts.values())
+    total = sum(sum(counts.values()) for counts in sides.values())
     if not total:
-        return []
+        return {}
     p_any_card = 0.93  # ~baseline: at least one card in a WC match
-    ranked = sorted(counts.items(), key=lambda x: x[1], reverse=True)
-    return [(n, round(c / total * p_any_card * 100, 1)) for n, c in ranked[:top_n]]
+    out: dict[str, list[tuple[str, float]]] = {}
+    for side, counts in sides.items():
+        ranked = sorted(counts.items(), key=lambda x: x[1], reverse=True)
+        picks = [(n, round(c / total * p_any_card * 100, 1)) for n, c in ranked[:top_n]]
+        if picks:
+            out[side] = picks
+    return out
 
 
 def first_sub_probs(
-    home_players: dict, away_players: dict, top_n: int = 3
-) -> list[tuple[str, float]]:
-    """P(player is first subbed off): frequency of being subbed × earliness."""
-    weights: dict[str, float] = {}
-    for players in (home_players, away_players):
+    home_players: dict, away_players: dict, top_n: int = 2
+) -> dict[str, list[tuple[str, float]]]:
+    """The top_n players per team most likely to be the first one subbed off.
+
+    Weight = how often a player is subbed off × how early. Normalized across
+    both teams, then grouped by team. Returns {"home": [...], "away": [...]}.
+    """
+
+    def team_weights(players: dict) -> dict[str, float]:
+        w: dict[str, float] = {}
         for name, st in players.items():
             mins = st["sub_off_minutes"]
             if not mins:
                 continue
             avg_min = sum(mins) / len(mins)
             earliness = max(0.0, (90 - avg_min) / 45)  # 1.0 at 45', 0 at 90'
-            freq = len(mins)
-            weights[name] = freq * (0.5 + earliness)
-    total = sum(weights.values())
+            w[name] = len(mins) * (0.5 + earliness)
+        return w
+
+    sides = {"home": team_weights(home_players), "away": team_weights(away_players)}
+    total = sum(sum(w.values()) for w in sides.values())
     if not total:
-        return []
-    ranked = sorted(weights.items(), key=lambda x: x[1], reverse=True)
-    return [(n, round(w / total * 100, 1)) for n, w in ranked[:top_n]]
+        return {}
+    out: dict[str, list[tuple[str, float]]] = {}
+    for side, weights in sides.items():
+        ranked = sorted(weights.items(), key=lambda x: x[1], reverse=True)
+        picks = [(n, round(w / total * 100, 1)) for n, w in ranked[:top_n]]
+        if picks:
+            out[side] = picks
+    return out
 
 
 def build_prediction(
@@ -197,13 +253,20 @@ def build_prediction(
         pred["sources"].add(f"{label} team stats")
 
     if lh is not None:
-        # Half split: prefer bookmaker first-half 1X2 odds (paid API-Football
-        # plans), else use each team's empirical first-half goal share.
+        # Full-time result: the 4 most likely final scorelines, each paired
+        # with its real bookmaker Correct Score odd when available (else fair
+        # model-implied odds).
+        results, any_book = final_results(lh, la, odds.get("correct_score"), k=4)
+        pred["sections"]["final_result"] = {"results": results}
+        if any_book:
+            pred["sources"].add("API-Football correct-score odds")
+
+        # Per-half scorelines: prefer bookmaker first-half 1X2 odds (paid
+        # API-Football plans), else split by each team's first-half goal share.
         fhw = implied_probs(odds.get("first_half_winner", {}))
         if {"home", "draw", "away"} <= fhw.keys():
             lh1, la1 = fit_lambdas(fhw["home"], fhw["draw"], fhw["away"])
-            # First-half lambdas can't exceed the full-match ones
-            lh1, la1 = min(lh1, lh * 0.8), min(la1, la * 0.8)
+            lh1, la1 = min(lh1, lh * 0.8), min(la1, la * 0.8)  # 1H can't exceed FT
             lh2, la2 = max(lh - lh1, 0.05), max(la - la1, 0.05)
             pred["sources"].add("API-Football 1H odds")
         else:

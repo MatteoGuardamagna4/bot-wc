@@ -54,8 +54,35 @@ def _wc_teams() -> list[dict]:
     return _wc_teams_cache
 
 
+# Alternate names (Italian/Portuguese/Spanish, common variants) -> the name
+# API-Football uses in the WC squad list. Keeps id resolution reliable
+# without an extra fuzzy /teams?search request.
+_NAME_ALIASES = {
+    "cabo verde": "cape verde",
+    "cape verde islands": "cape verde",
+    "costa d'avorio": "ivory coast",
+    "cote d'ivoire": "ivory coast",
+    "corea del sud": "south korea",
+    "korea republic": "south korea",
+    "stati uniti": "usa",
+    "united states": "usa",
+    "olanda": "netherlands",
+    "paesi bassi": "netherlands",
+    "spagna": "spain",
+    "germania": "germany",
+    "francia": "france",
+    "inghilterra": "england",
+    "marocco": "morocco",
+    "arabia saudita": "saudi arabia",
+    "giappone": "japan",
+    "brasile": "brazil",
+    "croazia": "croatia",
+}
+
+
 def find_team_id(name: str) -> int | None:
     key = name.casefold().strip()
+    key = _NAME_ALIASES.get(key, key)
     if key in _team_id_cache:
         return _team_id_cache[key]
 
@@ -113,39 +140,13 @@ def schedule_available() -> bool:
     return bool(wc_fixtures())
 
 
-def find_fixture(team1: str, team2: str) -> dict | None:
-    """Find the upcoming WORLD CUP fixture between two teams.
+# Fixture status groups (API-Football "short" codes)
+_UPCOMING_STATUS = ("NS", "TBD")
+_FINISHED_STATUS = {"FT", "AET", "PEN", "WO", "AWD"}
+_LIVE_STATUS = {"1H", "HT", "2H", "ET", "BT", "P", "SUSP", "INT", "LIVE"}
 
-    Only the official WC 2026 calendar is searched: if the match is not in
-    the upcoming schedule, None is returned and the analyzer raises a
-    user-facing MatchNotFoundError (no head-to-head/friendly fallback).
-    """
-    id1, id2 = find_team_id(team1), find_team_id(team2)
-    if not id1 or not id2:
-        log.warning(
-            "API-Football: team id not found (%s=%s, %s=%s).",
-            team1, id1, team2, id2,
-        )
-        return None
 
-    now = time.time()
-    upcoming = []
-    for f in wc_fixtures():
-        fix = f.get("fixture", {})
-        teams = f.get("teams", {})
-        ids = {teams.get("home", {}).get("id"), teams.get("away", {}).get("id")}
-        if not {id1, id2} <= ids:
-            continue
-        if fix.get("timestamp", 0) >= now - 6 * 3600 and fix.get("status", {}).get(
-            "short"
-        ) in ("NS", "TBD"):
-            upcoming.append(f)
-    upcoming.sort(key=lambda f: f["fixture"]["timestamp"])
-
-    if not upcoming:
-        log.info("API-Football: no upcoming WC fixture %s-%s.", team1, team2)
-        return None
-    fx = upcoming[0]
+def _fixture_dict(fx: dict) -> dict:
     return {
         "fixture_id": fx["fixture"]["id"],
         "date": fx["fixture"].get("date"),
@@ -155,6 +156,107 @@ def find_fixture(team1: str, team2: str) -> dict | None:
         "home_id": fx["teams"]["home"]["id"],
         "away_id": fx["teams"]["away"]["id"],
     }
+
+
+def find_fixture_ex(team1: str, team2: str) -> tuple[dict | None, str]:
+    """Find the upcoming WC fixture between two teams, with a diagnosis.
+
+    Returns (fixture_dict, "ok") on success, otherwise (None, reason) where
+    reason is one of:
+      - "schedule_unavailable": the WC calendar could not be fetched
+      - "team_not_found":       one/both team names couldn't be resolved
+      - "not_scheduled":        no match between the two teams is in the
+                                calendar (e.g. different groups, or a
+                                knockout pairing not drawn yet)
+      - "already_played":       their match exists but has already finished
+      - "live":                 their match is currently being played
+      - "not_upcoming":         exists but in some other non-playable state
+    """
+    id1, id2 = find_team_id(team1), find_team_id(team2)
+    if not id1 or not id2:
+        log.warning(
+            "API-Football: team id not found (%s=%s, %s=%s).",
+            team1, id1, team2, id2,
+        )
+        return None, "team_not_found"
+
+    fixtures = wc_fixtures()
+    if not fixtures:
+        return None, "schedule_unavailable"
+
+    # All calendar fixtures featuring BOTH teams, regardless of status/time.
+    matched = [
+        f
+        for f in fixtures
+        if {id1, id2}
+        <= {
+            f.get("teams", {}).get("home", {}).get("id"),
+            f.get("teams", {}).get("away", {}).get("id"),
+        }
+    ]
+    if not matched:
+        log.info(
+            "API-Football: %s (id %s) and %s (id %s) have no fixture in the WC calendar.",
+            team1, id1, team2, id2,
+        )
+        return None, "not_scheduled"
+
+    now = time.time()
+    upcoming = [
+        f
+        for f in matched
+        if (f.get("fixture", {}).get("status", {}).get("short") in _UPCOMING_STATUS)
+        and f.get("fixture", {}).get("timestamp", 0) >= now - 6 * 3600
+    ]
+    if upcoming:
+        upcoming.sort(key=lambda f: f["fixture"]["timestamp"])
+        return _fixture_dict(upcoming[0]), "ok"
+
+    # A match exists but isn't pre-match anymore — say exactly why.
+    statuses = [
+        (f.get("fixture", {}).get("status", {}) or {}).get("short") for f in matched
+    ]
+    log.info(
+        "API-Football: %s-%s found but not upcoming (statuses=%s).",
+        team1, team2, statuses,
+    )
+    if any(s in _LIVE_STATUS for s in statuses):
+        return None, "live"
+    if any(s in _FINISHED_STATUS for s in statuses):
+        return None, "already_played"
+    return None, "not_upcoming"
+
+
+def upcoming_fixtures(limit: int | None = None) -> list[dict]:
+    """All not-yet-started WC fixtures, soonest first (for the web match list).
+
+    Each item: {"home", "away", "home_id", "away_id", "date", "timestamp"}.
+    Returns [] if the calendar is unreachable.
+    """
+    now = time.time()
+    out: list[dict] = []
+    for f in wc_fixtures():
+        fix = f.get("fixture", {})
+        if fix.get("status", {}).get("short") not in _UPCOMING_STATUS:
+            continue
+        if fix.get("timestamp", 0) < now - 6 * 3600:
+            continue
+        teams = f.get("teams", {})
+        home, away = teams.get("home", {}), teams.get("away", {})
+        if not home.get("name") or not away.get("name"):
+            continue  # skip knockout placeholders with no teams yet
+        out.append(
+            {
+                "home": home.get("name"),
+                "away": away.get("name"),
+                "home_id": home.get("id"),
+                "away_id": away.get("id"),
+                "date": fix.get("date"),
+                "timestamp": fix.get("timestamp"),
+            }
+        )
+    out.sort(key=lambda x: x["timestamp"] or 0)
+    return out[:limit] if limit else out
 
 
 def get_odds(fixture_id: int) -> dict:
@@ -314,11 +416,16 @@ def collect_team_stats(team_id: int, team_label: str = "") -> dict:
 
 
 def get_match_data(team1: str, team2: str) -> dict:
-    """Orchestrate: fixture + odds. Returns {} if nothing found."""
-    fx = find_fixture(team1, team2)
+    """Orchestrate: fixture + odds.
+
+    On success returns {"fixture": {...}, "odds": {...}}. When no playable
+    fixture is found, returns {"fixture": None, "reason": <reason>} so the
+    caller can show the user a specific message.
+    """
+    fx, reason = find_fixture_ex(team1, team2)
     if not fx:
-        log.info("API-Football: no fixture for %s vs %s", team1, team2)
-        return {}
+        log.info("API-Football: no fixture for %s vs %s (%s)", team1, team2, reason)
+        return {"fixture": None, "reason": reason}
     log.info(
         "API-Football: fixture %s (%s vs %s, %s)",
         fx["fixture_id"], fx["home"], fx["away"], fx.get("date"),

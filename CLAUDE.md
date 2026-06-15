@@ -5,15 +5,17 @@ Guidance for Claude Code when working in this repository.
 ## What this is
 
 A private Telegram bot for World Cup 2026 match predictions. Users send
-`/analyze ARG vs FRA` and get predictions for: 1st/2nd half scores,
-goalscorers, first card, first substitution. **Real data first, AI only as
-fallback** — the core principle of this codebase.
+`/analyze ARG vs FRA` and get predictions for: the 4 most likely final
+results (with bookmaker odds), 1st/2nd half scores, goalscorers, first card
+and first substitution (the 2 most likely players **per team**). **Real data
+first, AI only as fallback** — the core principle of this codebase.
 
 ## Run & test
 
 ```bash
 pip install -r requirements.txt
-python bot.py                        # start the bot (needs .env)
+python bot.py                        # start the Telegram bot (needs .env)
+python web.py                        # start the web dashboard on :8000
 
 # Module-level smoke tests (no Telegram needed):
 python espn.py Canada                # ESPN player stats
@@ -22,21 +24,28 @@ python scraper.py Argentina France   # Betexplorer scraping
 python -c "from analyzer import run_analysis; print(run_analysis('Argentina','France'))"
 ```
 
-There is no test suite or linter configured. Deployed via Dockerfile on
-Railway (polling worker, no HTTP port).
+There is no test suite or linter configured. Deployed on Railway as **two
+services from the same repo**: the bot (Dockerfile default `CMD python bot.py`,
+polling worker, no HTTP port) and the web dashboard (custom start command
+`gunicorn web:app --bind 0.0.0.0:$PORT ...`).
 
 ## Architecture / data pipeline
 
-`bot.py` (Telegram, auth) → `analyzer.run_analysis()` (orchestrator) →
-formatted message string back to the user.
+Two entry points share one pipeline:
+- `bot.py` (Telegram, auth) → `analyzer.run_analysis()` → formatted message string.
+- `web.py` (Flask, `ACCESS_CODE` login) → `analyzer.analyze()` → structured JSON
+  rendered by `static/index.html`. `analyze()` returns `{home, away, date, pred,
+  ai_sections}`; `run_analysis()` is just `analyze()` + `format_message()`.
+  Match list comes from `api_football.upcoming_fixtures()`.
 
 Order of preference inside the pipeline:
 
 1. `api_football.py` — primary source (api-sports.io, key in `.env`, Pro plan).
    Fixture lookup restricted to the official WC 2026 calendar
    (`WC_LEAGUE_ID=1`, `WC_SEASON=2026`), bookmaker odds (1X2, O/U 2.5,
-   first-half winner), per-player stats from `/fixtures/events`, and official
-   lineups from `/fixtures/lineups` (published ~20–60 min before kickoff).
+   first-half winner, correct score), per-player stats from `/fixtures/events`,
+   and official lineups from `/fixtures/lineups` (published ~20–60 min before
+   kickoff).
 2. `espn.py` — free fallback for player stats (no key needed).
 3. `sofascore.py` — second fallback, only if `SOFASCORE_ENABLED=true`
    (TLS-fingerprint blocked on many IPs; uses `curl_cffi` impersonation,

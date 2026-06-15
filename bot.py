@@ -111,7 +111,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "⚽ World Cup Prediction Bot\n\n"
         "Send:  /analyze ARG vs FRA\n"
         "I'll fetch bookmaker odds + player stats and compute predictions for:\n"
-        "• 1st & 2nd half scores\n• Goalscorers\n• First card\n• First substitution"
+        "• Top 4 final results (with odds)\n• 1st & 2nd half scores\n"
+        "• Goalscorers\n• First card (2 per team)\n• First substitution (2 per team)"
     )
 
 
