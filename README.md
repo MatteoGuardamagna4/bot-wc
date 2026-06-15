@@ -74,7 +74,7 @@ marcatori, cartellini e sostituzioni per squadra).
 - Frontend: `static/index.html` — nessun framework, nessun build.
 - Accesso protetto: login con `ACCESS_CODE` (lo stesso del bot), sessione via cookie firmato (`FLASK_SECRET`).
 - API: `GET /api/matches` (lista partite) e `GET /api/predict?home=&away=` (predizione).
-- In produzione gira con gunicorn: `gunicorn web:app --bind 0.0.0.0:$PORT --workers 2 --timeout 120`.
+- In produzione gira con gunicorn: `gunicorn web:app -c gunicorn.conf.py` (la porta viene letta da `$PORT` dentro `gunicorn.conf.py`, così il comando non dipende dall'espansione shell).
 
 ### Deploy su Railway (24/7, ~5$/mese)
 
@@ -100,9 +100,12 @@ Bot e sito **condividono lo stesso repo**, cambiano solo il comando d'avvio:
    (crea un secondo servizio dallo stesso codice).
 2. Nel nuovo servizio → **Settings** → **Deploy** → **Custom Start Command**:
    ```
-   gunicorn web:app --bind 0.0.0.0:$PORT --workers 2 --timeout 120
+   gunicorn web:app -c gunicorn.conf.py
    ```
    (sovrascrive il `CMD` del Dockerfile, che resta `python bot.py` per il bot).
+   La porta `$PORT` viene letta dentro `gunicorn.conf.py`: **non** mettere
+   `--bind 0.0.0.0:$PORT` nel comando, altrimenti Railway passa la stringa
+   letterale `$PORT` a gunicorn → errore "'$PORT' is not a valid port number".
 3. **Variables**: copia le stesse del bot (almeno `ACCESS_CODE`, `API_FOOTBALL_KEY`,
    `OPENAI_API_KEY`, `FLASK_SECRET`). Suggerimento: con i *Shared Variables* di
    Railway le definisci una volta sola per entrambi i servizi.

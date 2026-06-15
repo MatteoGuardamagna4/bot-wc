@@ -27,7 +27,8 @@ python -c "from analyzer import run_analysis; print(run_analysis('Argentina','Fr
 There is no test suite or linter configured. Deployed on Railway as **two
 services from the same repo**: the bot (Dockerfile default `CMD python bot.py`,
 polling worker, no HTTP port) and the web dashboard (custom start command
-`gunicorn web:app --bind 0.0.0.0:$PORT ...`).
+`gunicorn web:app -c gunicorn.conf.py`; the port is read from `$PORT` inside
+`gunicorn.conf.py`, not passed on the command line).
 
 ## Architecture / data pipeline
 
