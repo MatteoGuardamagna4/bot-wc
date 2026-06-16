@@ -11,12 +11,39 @@
     --warn: #d29922;
   }
   * { box-sizing: border-box; }
+  html { background: var(--bg); }
   body {
-    margin: 0; background: var(--bg); color: var(--txt);
+    margin: 0; color: var(--txt); min-height: 100vh;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     line-height: 1.5;
+    /* dynamic background: a slow "pitch at night" gradient drift */
+    background:
+      linear-gradient(135deg, #0b0f14 0%, #0d1a16 28%, #0b1320 55%, #120e1d 78%, #0b0f14 100%);
+    background-size: 320% 320%;
+    background-attachment: fixed;
+    animation: bgshift 30s ease-in-out infinite;
   }
-  .wrap { max-width: 720px; margin: 0 auto; padding: 20px 16px 60px; }
+  /* soft drifting glows for depth, behind all content */
+  body::before {
+    content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+    background:
+      radial-gradient(40vmax 40vmax at 18% 12%, rgba(46,160,67,.10), transparent 60%),
+      radial-gradient(38vmax 38vmax at 85% 88%, rgba(56,139,253,.10), transparent 60%);
+    animation: glowdrift 24s ease-in-out infinite alternate;
+  }
+  @keyframes bgshift {
+    0%   { background-position: 0% 50%; }
+    50%  { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
+  }
+  @keyframes glowdrift {
+    0%   { transform: translate3d(0, 0, 0) scale(1); opacity: .9; }
+    100% { transform: translate3d(0, -3%, 0) scale(1.08); opacity: 1; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    body, body::before { animation: none; }
+  }
+  .wrap { position: relative; z-index: 1; max-width: 720px; margin: 0 auto; padding: 20px 16px 60px; }
   header.top {
     display: flex; align-items: center; justify-content: space-between;
     margin-bottom: 18px;
@@ -71,6 +98,17 @@
   .teamblock { margin: 6px 0; }
   .teamblock .tname { font-size: 13px; color: var(--accent2); font-weight: 600; margin-bottom: 2px; }
   .ai-note { color: var(--warn); font-size: 12px; }
+
+  /* lineups */
+  .pill-ok { background: rgba(46,160,67,.15); border-color: var(--accent); color: var(--accent); }
+  .lineups-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 20px; }
+  @media (max-width: 520px) { .lineups-grid { grid-template-columns: 1fr; } }
+  .lu-side .tname { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .lu-label { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 8px 0 3px; }
+  .lu-list { margin: 0; padding-left: 20px; }
+  .lu-list li { padding: 1px 0; }
+  .lu-list.lu-subs li { font-size: 13px; color: var(--muted); }
+  .lu-empty { color: var(--muted); font-size: 14px; }
   pre.aitext { white-space: pre-wrap; margin: 0; font-family: inherit; color: var(--txt); }
   .sources { color: var(--muted); font-size: 12px; margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
   .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; vertical-align: middle; }
@@ -229,6 +267,8 @@ function renderPrediction(d) {
     if (inner) html += `<div class="section"><h3>${TITLES[key]}</h3>${inner}</div>`;
   }
 
+  html += renderLineups(d);
+
   let foot = "";
   if (d.sources && d.sources.length) foot += `📊 Sources: ${esc(d.sources.join(", "))}`;
   if (d.lambdas) foot += `<br>xG model: ${esc(d.home)} ${d.lambdas[0]} — ${esc(d.away)} ${d.lambdas[1]}`;
@@ -269,6 +309,36 @@ function renderStructured(key, data, d) {
     return html;
   }
   return "";
+}
+
+// ---------- lineups ----------
+function renderLineupSide(label, side) {
+  const tname = `<div class="tname">${esc(label)}` +
+    (side && side.formation ? ` <span class="pill">${esc(side.formation)}</span>` : "") +
+    `</div>`;
+  if (!side || !Array.isArray(side.starters) || !side.starters.length) {
+    return `<div class="lu-side">${tname}<div class="lu-empty">Not available</div></div>`;
+  }
+  const starters = `<ol class="lu-list">` +
+    side.starters.map((n) => `<li>${esc(n)}</li>`).join("") + `</ol>`;
+  const subs = (Array.isArray(side.subs) && side.subs.length)
+    ? `<div class="lu-label">Bench</div><ul class="lu-list lu-subs">` +
+      side.subs.map((n) => `<li>${esc(n)}</li>`).join("") + `</ul>`
+    : "";
+  return `<div class="lu-side">${tname}` +
+    `<div class="lu-label">Starting XI</div>${starters}${subs}</div>`;
+}
+
+function renderLineups(d) {
+  const lu = d.lineups;
+  if (!lu) {
+    return `<div class="section"><h3>📋 Lineups</h3>` +
+      `<div class="lu-empty">Official lineups not yet published — they come out ~1h before kickoff.</div></div>`;
+  }
+  const badge = `<span class="pill pill-ok">Official</span>`;
+  const grid = `<div class="lineups-grid">` +
+    renderLineupSide(d.home, lu.home) + renderLineupSide(d.away, lu.away) + `</div>`;
+  return `<div class="section"><h3>📋 Lineups ${badge}</h3>${grid}</div>`;
 }
 
 boot();

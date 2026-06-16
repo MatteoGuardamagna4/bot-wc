@@ -68,7 +68,11 @@ python web.py          # dashboard web su http://localhost:8000
 Interfaccia web minimale per usare le predizioni senza Telegram: si apre il sito,
 si inserisce l'`ACCESS_CODE`, si sceglie una partita dalla lista di quelle in
 programma e si ottengono le predizioni (risultati finali con quote, tempi,
-marcatori, cartellini e sostituzioni per squadra).
+marcatori, cartellini e sostituzioni per squadra). Quando disponibili (~1h prima
+del calcio d'inizio) viene mostrata anche la sezione **Formazioni ufficiali**
+(titolari + panchina per squadra, con badge "Official"); prima sono indicate come
+non ancora pubblicate. Lo sfondo è un gradiente animato (si ferma se il sistema ha
+attivo "riduci animazioni").
 
 - Backend: `web.py` (Flask) — riusa la stessa pipeline del bot (`analyzer.analyze`).
 - Frontend: `static/index.html` — nessun framework, nessun build.

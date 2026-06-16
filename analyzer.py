@@ -138,6 +138,9 @@ def analyze(team1: str, team2: str) -> dict:
         "date": fx.get("date"),
         "pred": pred,
         "ai_sections": ai_sections,
+        # Official lineups when published (~20-60 min before kickoff), else None.
+        # {"home": {formation, starters, subs}, "away": {...}} — see get_lineups.
+        "lineups": lineups,
     }
 
 

@@ -99,6 +99,15 @@ def predict():
     sources = list(pred.get("sources", []))
     if data["ai_sections"]:
         sources.append("AI (fallback for missing markets)")
+
+    # Official lineups, only when at least one side has a published XI.
+    lineups_out = None
+    lineups = data.get("lineups") or {}
+    home_l = lineups.get("home") or {}
+    away_l = lineups.get("away") or {}
+    if home_l.get("starters") or away_l.get("starters"):
+        lineups_out = {"source": "official", "home": home_l, "away": away_l}
+
     return jsonify(
         {
             "home": data["home"],
@@ -108,6 +117,7 @@ def predict():
             "ai_sections": data["ai_sections"],
             "sources": sources,
             "lambdas": pred.get("lambdas"),
+            "lineups": lineups_out,
             # plain-text version (same as the Telegram message) for copy/share
             "text": format_message(
                 data["home"], data["away"], pred, data["ai_sections"]
