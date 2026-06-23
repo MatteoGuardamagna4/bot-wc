@@ -37,7 +37,13 @@ Two entry points share one pipeline:
 - `web.py` (Flask, `ACCESS_CODE` login) → `analyzer.analyze()` → structured JSON
   rendered by `static/index.html`. `analyze()` returns `{home, away, date, pred,
   ai_sections}`; `run_analysis()` is just `analyze()` + `format_message()`.
-  Match list comes from `api_football.upcoming_fixtures()`.
+  Match list comes from `api_football.upcoming_fixtures()`. After a match is
+  picked the web UI shows a menu: either side's WC 2026 history (per-team
+  buttons) or the prediction. History is served by `GET /api/team-history?
+  team_id=&team=` → `api_football.team_tournament_history()` — for each finished
+  WC 2026 match featuring the team: formation, booked players and substitutions.
+  **Real API-Football data only, no AI**; per-fixture details are cached
+  (`_match_detail`, immutable once played).
 
 Order of preference inside the pipeline:
 

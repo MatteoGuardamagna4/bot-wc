@@ -114,6 +114,23 @@
   .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; vertical-align: middle; }
   @keyframes spin { to { transform: rotate(360deg); } }
   .center { text-align: center; padding: 40px 0; color: var(--muted); }
+
+  /* match menu (choose team history or prediction) */
+  .menu-actions { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
+  .menu-btn {
+    width: 100%; text-align: left; background: var(--card); color: var(--txt);
+    border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px;
+    font-weight: 500; transition: border-color .15s, background .15s;
+  }
+  .menu-btn:hover { border-color: var(--accent2); background: var(--card2); }
+  .menu-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  .menu-btn.primary:hover { background: #2c9c40; }
+
+  /* team history */
+  .hist-line { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .hist-label { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+  .hist-score { font-variant-numeric: tabular-nums; }
+  .section h3 .round { font-size: 12px; color: var(--muted); font-weight: 400; }
 </style>
 </head>
 <body>
@@ -143,6 +160,22 @@
     <!-- match list view -->
     <div id="matchesView">
       <div id="matchesList"><div class="center"><span class="spinner"></span> Loading matches…</div></div>
+    </div>
+
+    <!-- match menu view (choose team history or prediction) -->
+    <div id="menuView" class="hidden">
+      <div class="pred-head">
+        <button class="ghost" id="menuBackBtn">← Back</button>
+      </div>
+      <div id="menuContent"></div>
+    </div>
+
+    <!-- team history view -->
+    <div id="historyView" class="hidden">
+      <div class="pred-head">
+        <button class="ghost" id="historyBackBtn">← Back</button>
+      </div>
+      <div id="historyContent"></div>
     </div>
 
     <!-- prediction view -->
@@ -202,10 +235,16 @@ $("logoutBtn").addEventListener("click", async () => {
   location.reload();
 });
 
-$("backBtn").addEventListener("click", () => {
-  $("predView").classList.add("hidden");
-  $("matchesView").classList.remove("hidden");
-});
+const VIEWS = ["matchesView", "menuView", "historyView", "predView"];
+function showView(id) {
+  for (const v of VIEWS) $(v).classList.toggle("hidden", v !== id);
+}
+
+// Back navigation: prediction/history return to the match menu, the menu
+// returns to the match list.
+$("menuBackBtn").addEventListener("click", () => showView("matchesView"));
+$("historyBackBtn").addEventListener("click", () => showView("menuView"));
+$("backBtn").addEventListener("click", () => showView("menuView"));
 
 function showApp() {
   $("app").classList.remove("hidden");
@@ -232,7 +271,8 @@ async function loadMatches() {
     for (const m of ms) {
       const d = m.date ? new Date(m.date) : null;
       const time = d ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
-      html += `<button class="match" data-home="${esc(m.home)}" data-away="${esc(m.away)}">
+      html += `<button class="match" data-home="${esc(m.home)}" data-away="${esc(m.away)}"
+        data-home-id="${esc(m.home_id ?? "")}" data-away-id="${esc(m.away_id ?? "")}">
         <span class="teams">${esc(m.home)} <span class="muted">vs</span> ${esc(m.away)}</span>
         <span class="time">${esc(time)}</span></button>`;
     }
@@ -240,13 +280,31 @@ async function loadMatches() {
   }
   el.innerHTML = html;
   el.querySelectorAll(".match").forEach((b) =>
-    b.addEventListener("click", () => selectMatch(b.dataset.home, b.dataset.away)));
+    b.addEventListener("click", () => openMatch({
+      home: b.dataset.home, away: b.dataset.away,
+      homeId: b.dataset.homeId, awayId: b.dataset.awayId,
+    })));
+}
+
+// ---------- match menu (history vs prediction) ----------
+function openMatch(m) {
+  $("menuContent").innerHTML =
+    `<h2>${esc(m.home)} <span class="muted">vs</span> ${esc(m.away)}</h2>
+     <div class="pred-date">Choose what to see for this match.</div>
+     <div class="menu-actions">
+       <button class="menu-btn" id="histHomeBtn">📋 ${esc(m.home)} — World Cup 2026 so far</button>
+       <button class="menu-btn" id="histAwayBtn">📋 ${esc(m.away)} — World Cup 2026 so far</button>
+       <button class="menu-btn primary" id="predBtn">🔮 See match prediction</button>
+     </div>`;
+  $("histHomeBtn").onclick = () => openHistory(m.home, m.homeId);
+  $("histAwayBtn").onclick = () => openHistory(m.away, m.awayId);
+  $("predBtn").onclick = () => selectMatch(m.home, m.away);
+  showView("menuView");
 }
 
 // ---------- prediction ----------
 async function selectMatch(home, away) {
-  $("matchesView").classList.add("hidden");
-  $("predView").classList.remove("hidden");
+  showView("predView");
   $("predContent").innerHTML =
     `<div class="center"><span class="spinner"></span> Analyzing ${esc(home)} vs ${esc(away)}… (this can take up to a minute)</div>`;
 
@@ -339,6 +397,73 @@ function renderLineups(d) {
   const grid = `<div class="lineups-grid">` +
     renderLineupSide(d.home, lu.home) + renderLineupSide(d.away, lu.away) + `</div>`;
   return `<div class="section"><h3>📋 Lineups ${badge}</h3>${grid}</div>`;
+}
+
+// ---------- team history (WC 2026 only) ----------
+async function openHistory(team, teamId) {
+  showView("historyView");
+  $("historyContent").innerHTML =
+    `<div class="center"><span class="spinner"></span> Loading ${esc(team)}’s World Cup 2026 history…</div>`;
+  const params = new URLSearchParams({ team });
+  if (teamId) params.set("team_id", teamId);
+  const { ok, body } = await api(`/api/team-history?${params.toString()}`);
+  if (!ok) {
+    $("historyContent").innerHTML =
+      `<div class="section"><div class="err">${esc(body.error || "Could not load history.")}</div></div>`;
+    return;
+  }
+  renderHistory(body);
+}
+
+function cardEmoji(card) {
+  return /red/i.test(card || "") ? "🟥" : "🟨";
+}
+
+function fmtMinute(x) {
+  if (x.minute == null) return "";
+  return `<span class="muted">${x.minute}${x.extra ? "+" + x.extra : ""}’</span>`;
+}
+
+function renderHistory(d) {
+  const matches = d.matches || [];
+  let html = `<h2>${esc(d.team)} <span class="muted">— World Cup 2026 so far</span></h2>`;
+  if (!matches.length) {
+    html += `<div class="section"><div class="lu-empty">No completed World Cup 2026 matches yet for ${esc(d.team)}.</div></div>`;
+    $("historyContent").innerHTML = html;
+    return;
+  }
+  html += `<div class="pred-date">${matches.length} match${matches.length > 1 ? "es" : ""} played</div>`;
+
+  matches.forEach((m, i) => {
+    const score = (m.goals_for != null && m.goals_against != null)
+      ? `<span class="pill hist-score">${m.goals_for}–${m.goals_against}</span>` : "";
+    const venue = m.is_home ? "vs" : "at";
+    const round = m.round ? ` <span class="round">${esc(m.round)}</span>` : "";
+    const head = `Match ${i + 1}: <span class="muted">${venue}</span> ${esc(m.opponent || "?")} ${score}${round}`;
+
+    let body = `<div class="hist-line"><span class="hist-label">Formation</span>`;
+    body += m.formation
+      ? `<span class="pill pill-ok">${esc(m.formation)}</span>`
+      : `<span class="muted">not available</span>`;
+    body += `</div>`;
+
+    body += `<div class="lu-label">Booked players</div>`;
+    body += (m.booked && m.booked.length)
+      ? `<ul class="lu-list">` + m.booked.map((b) =>
+          `<li>${cardEmoji(b.card)} ${esc(b.name)} ${fmtMinute(b)}</li>`).join("") + `</ul>`
+      : `<div class="lu-empty">None recorded.</div>`;
+
+    body += `<div class="lu-label">Substitutions</div>`;
+    body += (m.subs && m.subs.length)
+      ? `<ul class="lu-list">` + m.subs.map((s) =>
+          `<li>${esc(s.off || "?")} <span class="muted">→</span> ${esc(s.on || "?")} ${fmtMinute(s)}</li>`).join("") + `</ul>`
+      : `<div class="lu-empty">None recorded.</div>`;
+
+    html += `<div class="section"><h3>${head}</h3>${body}</div>`;
+  });
+
+  html += `<div class="sources">📊 Source: API-Football — official World Cup 2026 lineups &amp; match events</div>`;
+  $("historyContent").innerHTML = html;
 }
 
 boot();

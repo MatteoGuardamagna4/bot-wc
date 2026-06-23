@@ -67,17 +67,28 @@ python web.py          # dashboard web su http://localhost:8000
 
 Interfaccia web minimale per usare le predizioni senza Telegram: si apre il sito,
 si inserisce l'`ACCESS_CODE`, si sceglie una partita dalla lista di quelle in
-programma e si ottengono le predizioni (risultati finali con quote, tempi,
-marcatori, cartellini e sostituzioni per squadra). Quando disponibili (~1h prima
-del calcio d'inizio) viene mostrata anche la sezione **Formazioni ufficiali**
+programma. Dopo aver scelto la partita si apre un menù con tre opzioni: lo
+**storico** di ciascuna delle due squadre nel Mondiale 2026 (pulsanti separati) e
+la **predizione** del match. Le predizioni includono risultati finali con quote,
+tempi, marcatori, cartellini e sostituzioni per squadra. Quando disponibili (~1h
+prima del calcio d'inizio) viene mostrata anche la sezione **Formazioni ufficiali**
 (titolari + panchina per squadra, con badge "Official"); prima sono indicate come
 non ancora pubblicate. Lo sfondo è un gradiente animato (si ferma se il sistema ha
 attivo "riduci animazioni").
 
+**Storico squadra (solo Mondiale 2026)**: per la squadra scelta vengono mostrate,
+partita per partita (solo le gare già giocate, dalla più vecchia), la **formazione**
+usata, i **giocatori ammoniti/espulsi** e le **sostituzioni** effettuate. Sono
+**solo dati reali** da API-Football (`/fixtures/lineups` + `/fixtures/events`),
+nessuna stima AI: se un dato non è disponibile per quella partita viene indicato
+come "not available". I dettagli delle partite concluse sono immutabili e vengono
+messi in cache.
+
 - Backend: `web.py` (Flask) — riusa la stessa pipeline del bot (`analyzer.analyze`).
 - Frontend: `static/index.html` — nessun framework, nessun build.
 - Accesso protetto: login con `ACCESS_CODE` (lo stesso del bot), sessione via cookie firmato (`FLASK_SECRET`).
-- API: `GET /api/matches` (lista partite) e `GET /api/predict?home=&away=` (predizione).
+- API: `GET /api/matches` (lista partite), `GET /api/predict?home=&away=` (predizione)
+  e `GET /api/team-history?team_id=&team=` (storico squadra nel Mondiale 2026).
 - In produzione gira con gunicorn: `gunicorn web:app -c gunicorn.conf.py` (la porta viene letta da `$PORT` dentro `gunicorn.conf.py`, così il comando non dipende dall'espansione shell).
 
 ### Deploy su Railway (24/7, ~5$/mese)

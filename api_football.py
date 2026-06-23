@@ -26,6 +26,9 @@ _team_id_cache: dict[str, int] = {}
 _wc_teams_cache: list[dict] | None = None
 _wc_fixtures_cache: list[dict] | None = None
 _wc_fixtures_ts = 0.0
+# Per-(fixture, team) formation/booked/subs. Finished-match data never
+# changes, so this is cached for the life of the process.
+_match_detail_cache: dict[tuple[int, int], dict] = {}
 
 
 def _get(path: str, params: dict) -> list:
@@ -413,6 +416,119 @@ def collect_team_stats(team_id: int, team_label: str = "") -> dict:
         "first_half_goal_share": round(fh_goals / goals_for, 2) if fh_goals else 0.45,
         "players": players,
     }
+
+
+def _match_detail(fixture_id: int, team_id: int) -> dict:
+    """Formation, booked players and substitutions for one team in one
+    finished fixture. Result is cached per (fixture, team) — finished-match
+    data is immutable.
+
+    Returns {"formation": str|None, "booked": [...], "subs": [...]} where
+    each booked item is {"name", "minute", "extra", "card"} and each sub is
+    {"off", "on", "minute", "extra"}.
+    """
+    if not fixture_id or not team_id:
+        return {"formation": None, "booked": [], "subs": []}
+    key = (fixture_id, team_id)
+    if key in _match_detail_cache:
+        return _match_detail_cache[key]
+
+    formation = (get_lineups(fixture_id).get(team_id) or {}).get("formation")
+
+    booked: list[dict] = []
+    subs: list[dict] = []
+    events = _get("/fixtures/events", {"fixture": fixture_id})
+    for ev in events:
+        if (ev.get("team") or {}).get("id") != team_id:
+            continue
+        t = ev.get("time") or {}
+        minute, extra = t.get("elapsed"), t.get("extra")
+        if ev.get("type") == "Card":
+            name = (ev.get("player") or {}).get("name")
+            if name:
+                booked.append(
+                    {"name": name, "minute": minute, "extra": extra,
+                     "card": ev.get("detail", "")}
+                )
+        elif ev.get("type") == "subst":
+            # v3 convention (see collect_team_stats): 'player' is the one
+            # leaving the pitch, 'assist' is the one coming on.
+            subs.append(
+                {"off": (ev.get("player") or {}).get("name"),
+                 "on": (ev.get("assist") or {}).get("name"),
+                 "minute": minute, "extra": extra}
+            )
+
+    def _ord(x: dict) -> tuple[int, int]:
+        return (x.get("minute") or 0, x.get("extra") or 0)
+
+    booked.sort(key=_ord)
+    subs.sort(key=_ord)
+
+    detail = {"formation": formation, "booked": booked, "subs": subs}
+    # Only pin the cache once the events endpoint actually returned data, so a
+    # transient API failure doesn't get stuck as an empty result.
+    if events:
+        _match_detail_cache[key] = detail
+    return detail
+
+
+def team_tournament_history(team_id: int, team_name: str = "") -> dict:
+    """Per-match World Cup 2026 history for a team.
+
+    Considers ONLY finished WC 2026 fixtures featuring the team, oldest first.
+    For each match returns the formation used, the players booked and the
+    substitutions made (real data from API-Football only — no AI).
+
+    Returns {"team", "team_id", "matches": [ {fixture_id, date, round,
+    opponent, is_home, goals_for, goals_against, formation, booked, subs} ]}.
+    The list is empty if the team has no completed WC 2026 match yet.
+    """
+    if not team_id:
+        return {"team": team_name, "team_id": team_id, "matches": []}
+
+    played = [
+        f
+        for f in wc_fixtures()
+        if (f.get("fixture", {}).get("status", {}) or {}).get("short") in _FINISHED_STATUS
+        and team_id in (
+            (f.get("teams", {}).get("home") or {}).get("id"),
+            (f.get("teams", {}).get("away") or {}).get("id"),
+        )
+    ]
+    played.sort(key=lambda f: f.get("fixture", {}).get("timestamp") or 0)
+
+    matches: list[dict] = []
+    for f in played:
+        fid = f.get("fixture", {}).get("id")
+        teams = f.get("teams", {})
+        home, away = teams.get("home") or {}, teams.get("away") or {}
+        is_home = home.get("id") == team_id
+        opp = away if is_home else home
+        goals = f.get("goals", {}) or {}
+        gf = goals.get("home") if is_home else goals.get("away")
+        ga = goals.get("away") if is_home else goals.get("home")
+        detail = _match_detail(fid, team_id)
+        matches.append(
+            {
+                "fixture_id": fid,
+                "date": f.get("fixture", {}).get("date"),
+                "round": (f.get("league", {}) or {}).get("round"),
+                "opponent": opp.get("name"),
+                "is_home": is_home,
+                "goals_for": gf,
+                "goals_against": ga,
+                "formation": detail["formation"],
+                "booked": detail["booked"],
+                "subs": detail["subs"],
+            }
+        )
+
+    log.info(
+        "API-Football: WC2026 history for %s (id %s): %d match(es)",
+        team_name or team_id, team_id, len(matches),
+    )
+    return {"team": team_name, "team_id": team_id, "matches": matches}
 
 
 def get_match_data(team1: str, team2: str) -> dict:

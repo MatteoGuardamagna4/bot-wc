@@ -80,6 +80,35 @@ def matches():
     return jsonify({"matches": fixtures})
 
 
+@app.get("/api/team-history")
+@require_auth
+def team_history():
+    """A team's completed World Cup 2026 matches: formation, booked players
+    and substitutions per game (real API-Football data only)."""
+    team = (request.args.get("team") or "").strip()
+    team_id_arg = (request.args.get("team_id") or "").strip()
+    if not team and not team_id_arg:
+        return jsonify({"error": "Missing team."}), 400
+
+    team_id = None
+    if team_id_arg.isdigit():
+        team_id = int(team_id_arg)
+    elif team:
+        team_id = api_football.find_team_id(team)
+
+    if not team_id:
+        if not api_football.schedule_available():
+            return jsonify({"error": "Schedule provider unreachable."}), 503
+        return jsonify({"error": f"Couldn't recognize the team '{team}'."}), 404
+
+    try:
+        data = api_football.team_tournament_history(team_id, team)
+    except Exception:  # never leak a stack trace to the client
+        log.exception("Team history failed for %s", team or team_id)
+        return jsonify({"error": "Could not load team history."}), 500
+    return jsonify(data)
+
+
 @app.get("/api/predict")
 @require_auth
 def predict():
