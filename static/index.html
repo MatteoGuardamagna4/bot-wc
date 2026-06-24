@@ -131,6 +131,41 @@
   .hist-label { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
   .hist-score { font-variant-numeric: tabular-nums; }
   .section h3 .round { font-size: 12px; color: var(--muted); font-weight: 400; }
+
+  /* pitch diagram (past formation) */
+  .pitch-cap { text-align: center; margin: 2px 0 6px; }
+  .pitch {
+    position: relative; width: 100%; max-width: 320px; aspect-ratio: 3 / 4;
+    margin: 4px auto 2px; border: 1px solid var(--line); border-radius: 10px;
+    overflow: hidden;
+    background:
+      repeating-linear-gradient(0deg, #0f4a26 0 12.5%, #11512a 12.5% 25%);
+  }
+  .pitch::before {
+    content: ""; position: absolute; left: 6%; right: 6%; top: 50%;
+    border-top: 1px solid rgba(255,255,255,.22);
+  }
+  .pitch::after {
+    content: ""; position: absolute; left: 50%; top: 50%;
+    width: 64px; height: 64px; transform: translate(-50%, -50%);
+    border: 1px solid rgba(255,255,255,.22); border-radius: 50%;
+  }
+  .ptoken { position: absolute; transform: translate(-50%, -50%); width: 56px; text-align: center; }
+  .ptoken .num {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 26px; height: 26px; border-radius: 50%; background: var(--accent2);
+    color: #fff; font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums;
+    box-shadow: 0 1px 3px rgba(0,0,0,.45);
+  }
+  .ptoken.gk .num { background: var(--warn); }
+  .ptoken.df .num { background: #2f6feb; }
+  .ptoken.mf .num { background: var(--accent); }
+  .ptoken.fw .num { background: #d0493b; }
+  .ptoken .nm {
+    display: block; font-size: 10px; line-height: 1.15; color: #f0f4f8;
+    margin-top: 2px; text-shadow: 0 1px 2px rgba(0,0,0,.75);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
 </style>
 </head>
 <body>
@@ -424,6 +459,61 @@ function fmtMinute(x) {
   return `<span class="muted">${x.minute}${x.extra ? "+" + x.extra : ""}’</span>`;
 }
 
+// Keep a name short enough to fit a pitch token: drop a leading "F." initial,
+// otherwise keep the last word.
+function shortName(name) {
+  const n = String(name || "").trim();
+  if (n.length <= 12) return n;
+  const parts = n.split(/\s+/);
+  return parts.length > 1 ? parts[parts.length - 1] : n;
+}
+
+// Draw a team's past formation as a pitch diagram from per-player grid data
+// ("row:col"). Falls back to a numbered XI list when grid is missing, and to
+// just the shape badge / "not available" when there is no lineup at all.
+function renderPitch(lineup, formation) {
+  const players = (lineup || []).filter((p) => p && p.name);
+  const cap = formation
+    ? `<div class="pitch-cap"><span class="pill pill-ok">${esc(formation)}</span></div>` : "";
+
+  if (!players.length) {
+    return cap || `<div class="lu-empty">not available</div>`;
+  }
+
+  const gridOk = players.every((p) => /^\d+:\d+$/.test(p.grid || ""));
+  if (!gridOk) {
+    const list = `<ol class="lu-list">` + players.map((p) =>
+      `<li>${p.number != null ? esc(p.number) + ". " : ""}${esc(p.name)}` +
+      `${p.pos ? ` <span class="muted">(${esc(p.pos)})</span>` : ""}</li>`).join("") + `</ol>`;
+    return cap + list;
+  }
+
+  // Group by row (row 1 = GK). Render with GK at the bottom, attackers on top.
+  const rows = {};
+  for (const p of players) {
+    const [r, c] = p.grid.split(":").map(Number);
+    (rows[r] = rows[r] || []).push({ ...p, col: c });
+  }
+  const rowNums = Object.keys(rows).map(Number).sort((a, b) => a - b);
+  const R = rowNums.length;
+
+  const posClass = (pos) => ({ G: "gk", D: "df", M: "mf", F: "fw" }[(pos || "").toUpperCase()[0]] || "");
+
+  let tokens = "";
+  rowNums.forEach((rn, ri) => {
+    const inRow = rows[rn].sort((a, b) => a.col - b.col);
+    const n = inRow.length;
+    inRow.forEach((p, i) => {
+      const top = ((R - ri) - 0.5) / R * 100;   // GK row (ri=0) near the bottom
+      const left = (i + 1) / (n + 1) * 100;      // even spread across the row
+      tokens += `<div class="ptoken ${posClass(p.pos)}" style="top:${top.toFixed(1)}%;left:${left.toFixed(1)}%">` +
+        `<span class="num">${p.number != null ? esc(p.number) : ""}</span>` +
+        `<span class="nm">${esc(shortName(p.name))}</span></div>`;
+    });
+  });
+  return cap + `<div class="pitch">${tokens}</div>`;
+}
+
 function renderHistory(d) {
   const matches = d.matches || [];
   let html = `<h2>${esc(d.team)} <span class="muted">— World Cup 2026 so far</span></h2>`;
@@ -441,11 +531,7 @@ function renderHistory(d) {
     const round = m.round ? ` <span class="round">${esc(m.round)}</span>` : "";
     const head = `Match ${i + 1}: <span class="muted">${venue}</span> ${esc(m.opponent || "?")} ${score}${round}`;
 
-    let body = `<div class="hist-line"><span class="hist-label">Formation</span>`;
-    body += m.formation
-      ? `<span class="pill pill-ok">${esc(m.formation)}</span>`
-      : `<span class="muted">not available</span>`;
-    body += `</div>`;
+    let body = `<div class="lu-label">Formation</div>` + renderPitch(m.lineup, m.formation);
 
     body += `<div class="lu-label">Booked players</div>`;
     body += (m.booked && m.booked.length)

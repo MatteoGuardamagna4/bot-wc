@@ -308,11 +308,25 @@ def get_odds(fixture_id: int) -> dict:
     return out
 
 
-def get_lineups(fixture_id: int) -> dict:
-    """Official lineups, published ~20-60 min before kickoff.
+def _lu_player(x: dict) -> dict:
+    """One lineup entry -> {name, number, pos, grid}. ``grid`` is "row:col"
+    (row 1 = goalkeeper, higher rows are further forward) and powers the
+    pitch diagram; it may be None when the provider omits positions."""
+    p = (x or {}).get("player") or {}
+    return {
+        "name": p.get("name"),
+        "number": p.get("number"),
+        "pos": p.get("pos"),
+        "grid": p.get("grid"),
+    }
 
-    Returns {team_id: {"formation": str, "starters": [names], "subs": [names]}}
-    or {} if lineups are not (yet) available.
+
+def _fetch_lineups(fixture_id: int) -> dict[int, dict]:
+    """Raw lineups keyed by team id, keeping per-player position data.
+
+    {team_id: {"formation": str, "startXI": [player...], "subs": [player...]}}
+    where each player is the dict from _lu_player. Returns {} when lineups are
+    not (yet) available. Single /fixtures/lineups request.
     """
     resp = _get("/fixtures/lineups", {"fixture": fixture_id})
     out: dict[int, dict] = {}
@@ -320,21 +334,27 @@ def get_lineups(fixture_id: int) -> dict:
         tid = (item.get("team") or {}).get("id")
         if not tid:
             continue
-
-        def names(key: str) -> list[str]:
-            return [
-                n
-                for n in (
-                    ((x or {}).get("player") or {}).get("name")
-                    for x in item.get(key) or []
-                )
-                if n
-            ]
-
         out[tid] = {
             "formation": item.get("formation"),
-            "starters": names("startXI"),
-            "subs": names("substitutes"),
+            "startXI": [_lu_player(x) for x in item.get("startXI") or []],
+            "subs": [_lu_player(x) for x in item.get("substitutes") or []],
+        }
+    return out
+
+
+def get_lineups(fixture_id: int) -> dict:
+    """Official lineups, published ~20-60 min before kickoff.
+
+    Returns {team_id: {"formation": str, "starters": [names], "subs": [names]}}
+    or {} if lineups are not (yet) available. (Name-only view over
+    _fetch_lineups, kept for the prediction pipeline's existing contract.)
+    """
+    out: dict[int, dict] = {}
+    for tid, data in _fetch_lineups(fixture_id).items():
+        out[tid] = {
+            "formation": data["formation"],
+            "starters": [p["name"] for p in data["startXI"] if p["name"]],
+            "subs": [p["name"] for p in data["subs"] if p["name"]],
         }
     if out:
         log.info(
@@ -419,21 +439,25 @@ def collect_team_stats(team_id: int, team_label: str = "") -> dict:
 
 
 def _match_detail(fixture_id: int, team_id: int) -> dict:
-    """Formation, booked players and substitutions for one team in one
-    finished fixture. Result is cached per (fixture, team) — finished-match
-    data is immutable.
+    """Formation, starting XI, booked players and substitutions for one team
+    in one finished fixture. Result is cached per (fixture, team) —
+    finished-match data is immutable.
 
-    Returns {"formation": str|None, "booked": [...], "subs": [...]} where
-    each booked item is {"name", "minute", "extra", "card"} and each sub is
+    Returns {"formation": str|None, "lineup": [...], "booked": [...],
+    "subs": [...]} where each lineup item is {"name", "number", "pos", "grid"}
+    (grid = "row:col", powers the pitch diagram), each booked item is
+    {"name", "minute", "extra", "card"} and each sub is
     {"off", "on", "minute", "extra"}.
     """
     if not fixture_id or not team_id:
-        return {"formation": None, "booked": [], "subs": []}
+        return {"formation": None, "lineup": [], "booked": [], "subs": []}
     key = (fixture_id, team_id)
     if key in _match_detail_cache:
         return _match_detail_cache[key]
 
-    formation = (get_lineups(fixture_id).get(team_id) or {}).get("formation")
+    team_lu = _fetch_lineups(fixture_id).get(team_id) or {}
+    formation = team_lu.get("formation")
+    lineup = [p for p in (team_lu.get("startXI") or []) if p.get("name")]
 
     booked: list[dict] = []
     subs: list[dict] = []
@@ -465,7 +489,8 @@ def _match_detail(fixture_id: int, team_id: int) -> dict:
     booked.sort(key=_ord)
     subs.sort(key=_ord)
 
-    detail = {"formation": formation, "booked": booked, "subs": subs}
+    detail = {"formation": formation, "lineup": lineup,
+              "booked": booked, "subs": subs}
     # Only pin the cache once the events endpoint actually returned data, so a
     # transient API failure doesn't get stuck as an empty result.
     if events:
@@ -477,12 +502,13 @@ def team_tournament_history(team_id: int, team_name: str = "") -> dict:
     """Per-match World Cup 2026 history for a team.
 
     Considers ONLY finished WC 2026 fixtures featuring the team, oldest first.
-    For each match returns the formation used, the players booked and the
-    substitutions made (real data from API-Football only — no AI).
+    For each match returns the formation used, the starting XI (with grid
+    positions for the pitch diagram), the players booked and the substitutions
+    made (real data from API-Football only — no AI).
 
     Returns {"team", "team_id", "matches": [ {fixture_id, date, round,
-    opponent, is_home, goals_for, goals_against, formation, booked, subs} ]}.
-    The list is empty if the team has no completed WC 2026 match yet.
+    opponent, is_home, goals_for, goals_against, formation, lineup, booked,
+    subs} ]}. The list is empty if the team has no completed WC 2026 match yet.
     """
     if not team_id:
         return {"team": team_name, "team_id": team_id, "matches": []}
@@ -519,6 +545,7 @@ def team_tournament_history(team_id: int, team_name: str = "") -> dict:
                 "goals_for": gf,
                 "goals_against": ga,
                 "formation": detail["formation"],
+                "lineup": detail["lineup"],
                 "booked": detail["booked"],
                 "subs": detail["subs"],
             }

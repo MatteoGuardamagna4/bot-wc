@@ -78,11 +78,13 @@ attivo "riduci animazioni").
 
 **Storico squadra (solo Mondiale 2026)**: per la squadra scelta vengono mostrate,
 partita per partita (solo le gare già giocate, dalla più vecchia), la **formazione**
-usata, i **giocatori ammoniti/espulsi** e le **sostituzioni** effettuate. Sono
-**solo dati reali** da API-Football (`/fixtures/lineups` + `/fixtures/events`),
-nessuna stima AI: se un dato non è disponibile per quella partita viene indicato
-come "not available". I dettagli delle partite concluse sono immutabili e vengono
-messi in cache.
+usata — disegnata come **schema in campo** (gli 11 titolari posizionati per ruolo,
+portiere in basso) con il modulo (es. 4-3-3) come didascalia — i **giocatori
+ammoniti/espulsi** e le **sostituzioni** effettuate. Sono **solo dati reali** da
+API-Football (`/fixtures/lineups` + `/fixtures/events`), nessuna stima AI: se un
+dato non è disponibile per quella partita viene indicato come "not available" (e se
+mancano le posizioni dei giocatori si ripiega su un elenco numerato dell'XI). I
+dettagli delle partite concluse sono immutabili e vengono messi in cache.
 
 - Backend: `web.py` (Flask) — riusa la stessa pipeline del bot (`analyzer.analyze`).
 - Frontend: `static/index.html` — nessun framework, nessun build.

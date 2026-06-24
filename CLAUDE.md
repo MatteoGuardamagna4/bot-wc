@@ -41,9 +41,12 @@ Two entry points share one pipeline:
   picked the web UI shows a menu: either side's WC 2026 history (per-team
   buttons) or the prediction. History is served by `GET /api/team-history?
   team_id=&team=` → `api_football.team_tournament_history()` — for each finished
-  WC 2026 match featuring the team: formation, booked players and substitutions.
-  **Real API-Football data only, no AI**; per-fixture details are cached
-  (`_match_detail`, immutable once played).
+  WC 2026 match featuring the team: formation, **starting XI with grid
+  positions** (rendered as a pitch diagram in the history view), booked players
+  and substitutions. **Real API-Football data only, no AI**; per-fixture details
+  are cached (`_match_detail`, immutable once played). `get_lineups()` is a
+  name-only wrapper over `_fetch_lineups()`, which keeps each player's
+  grid/number/pos; the prediction pipeline's `get_lineups` contract is unchanged.
 
 Order of preference inside the pipeline:
 
